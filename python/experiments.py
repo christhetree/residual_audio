@@ -21,7 +21,7 @@ logging.basicConfig()
 log = logging.getLogger(__name__)
 log.setLevel(level=os.environ.get('LOGLEVEL', 'INFO'))
 
-# tr.manual_seed(48)  # Set for reproducible results
+# tr.manual_seed(42)  # Set for reproducible results
 
 
 def train(experiment_name: str) -> None:
@@ -72,7 +72,7 @@ def train(experiment_name: str) -> None:
 
     trainer = pl.Trainer(gpus=GPU,
                          progress_bar_refresh_rate=1,
-                         max_epochs=50,
+                         max_epochs=10,
                          log_every_n_steps=100,
                          callbacks=[cp, es])
     log.info('')
@@ -113,7 +113,7 @@ def eval(model_name: str, n_samples: int = 4) -> None:
     dataset = PathsDataset(paths)
     eval_dl = DataLoader(dataset,
                          batch_size=batch_size,
-                         shuffle=True,  # Set to false for reproducible results
+                         shuffle=False,  # Set to false for reproducible results
                          drop_last=True)
     batch = next(iter(eval_dl))
 
@@ -127,9 +127,10 @@ def eval(model_name: str, n_samples: int = 4) -> None:
                     hop_length=HOP_LENGTH,
                     power=2.0)
 
+    # for idx in [0, 1]:
     for idx in random.sample(range(len(batch)), n_samples):
         log.info(f'Sample batch idx: {idx}')
-        sf.write(os.path.join(OUT_DIR, f'{idx:>02}_orig.wav'),
+        sf.write(os.path.join(OUT_DIR, f'{model_name}_{idx:>02}_orig.wav'),
                  batch[idx].detach().numpy(),
                  samplerate=SR)
 
@@ -139,21 +140,30 @@ def eval(model_name: str, n_samples: int = 4) -> None:
         diff_gl = gl(diff[idx].unsqueeze(0)).squeeze(0)
         diff_gl_norm = normalize_waveform(diff_gl)
 
-        # sf.write(os.path.join(OUT_DIR, f'{idx:>02}_spec_gl.wav'),
-        #          spec_gl[0].detach().numpy(),
-        #          samplerate=SR)
-        sf.write(os.path.join(OUT_DIR, f'{idx:>02}_rec_gl.wav'),
+        sf.write(os.path.join(OUT_DIR, f'{model_name}_{idx:>02}_rec_gl.wav'),
                  rec_gl.detach().numpy(),
                  samplerate=SR)
-        # sf.write(os.path.join(OUT_DIR, f'{idx:>02}_diff_gl.wav'),
-        #          diff_gl[0].detach().numpy(),
-        #          samplerate=SR)
-        sf.write(os.path.join(OUT_DIR, f'{idx:>02}_diff_gl_norm.wav'),
+        sf.write(os.path.join(OUT_DIR, f'{model_name}_{idx:>02}_diff_gl_norm.wav'),
                  diff_gl_norm.detach().numpy(),
                  samplerate=SR)
 
 
 if __name__ == '__main__':
-    experiment_name = 'ae__video_mae_4layers_tanh'
+    experiment_name = 'ae__2conv1d_32filters_2stride'
     train(experiment_name)
-    # eval('ae__video_mae_2layer_tanh__epoch=44__val_loss=0.024.ckpt')
+
+    # eval('testing__epoch=00__val_loss=0.209.ckpt')
+
+    # eval('ae__1conv1d_16filters_2stride__epoch=00__val_loss=0.077.ckpt')
+    # eval('ae__1conv1d_128filters_2stride__epoch=00__val_loss=0.072.ckpt')
+    # eval('ae__1conv1d_512filters_2stride__epoch=00__val_loss=0.066.ckpt')
+    # eval('ae__1conv1d_512filters_2stride__epoch=06__val_loss=0.048.ckpt')
+    # eval('ae__1conv1d_512filters_2stride__epoch=06__val_loss=0.048.ckpt')
+
+    # eval('ae__2conv_16filters_2stride__epoch=00__val_loss=0.049.ckpt')
+
+    # eval('ae__2conv_1filters__epoch=00__val_loss=0.111.ckpt')
+    # eval('ae__2conv_4filters__epoch=00__val_loss=0.092.ckpt')
+    # eval('ae__2conv_16filters__epoch=00__val_loss=0.061.ckpt')
+    # eval('ae__2conv_32filters__epoch=00__val_loss=0.053.ckpt')
+    # eval('ae__2conv_64filters__epoch=00__val_loss=0.046.ckpt')
