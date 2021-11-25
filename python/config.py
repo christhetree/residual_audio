@@ -17,6 +17,7 @@ SR = 32000  # I can hear only up to 16kHz :(
 BUFFER_SIZE_SECONDS = 3.00796875  # Makes STFT timesteps a nice number
 N_SAMPLES = int(SR * BUFFER_SIZE_SECONDS)
 STEP_SIZE_SECONDS = 0.05  # Hop length for chopping up raw audio
+MAX_N_STEPS = 500  # Max number of parts to chop one wav file into
 PEAK_VALUE = 0.99  # Max absolute value of training data waveforms
 EPS = 1e-7
 N_FFT = 1024
@@ -29,6 +30,6 @@ BATCH_SIZE = CPU_BATCH_SIZE
 NUM_WORKERS = 0
 
 if tr.cuda.is_available():
-    GPU = [0]
+    GPU = [1]
     BATCH_SIZE = GPU_BATCH_SIZE
     NUM_WORKERS = 4

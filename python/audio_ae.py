@@ -20,10 +20,9 @@ class SpecAE(pl.LightningModule):
     def __init__(self,
                  n_fft: int = N_FFT,
                  hop_length: int = HOP_LENGTH,
-                 n_filters: int = 16,
-                 kernel: Tuple[int, int] = (4, 4),
-                 pooling: Tuple[int, int] = (2, 2),
-                 use_bias: bool = True,
+                 n_filters: int = 1,
+                 kernel: Tuple[int, int] = (4,),
+                 pooling: Tuple[int, int] = (2,),
                  activation: nn.Module = nn.ELU()) -> None:
         super().__init__()
 
@@ -31,69 +30,68 @@ class SpecAE(pl.LightningModule):
                                 hop_length=hop_length,
                                 power=2.0,
                                 normalized=False)
-        # TODO(christhetree): try using a 2 by 2 stride instead of pooling
-        # Set use_bias to false if you add batch normalization
+
+        n_channels = (n_fft // 2) + 1
         self.enc = nn.Sequential(
-            nn.Conv2d(1, n_filters, kernel, stride=(1, 1), padding='same', bias=use_bias),
+            nn.Conv1d(n_channels, n_filters, kernel, stride=pooling, padding=0),
             activation,
-            nn.MaxPool2d(pooling),
-            nn.Conv2d(n_filters, 2 * n_filters, kernel, stride=(1, 1), padding='same', bias=use_bias),
+            nn.Conv1d(n_filters, 2 * n_filters, kernel, stride=pooling, padding=0),
             activation,
-            nn.MaxPool2d(pooling),
-            nn.Conv2d(2 * n_filters, 4 * n_filters, kernel, stride=(1, 1), padding='same', bias=use_bias),
-            activation,
-            nn.MaxPool2d(pooling),
-            nn.Conv2d(4 * n_filters, 8 * n_filters, kernel, stride=(1, 1), padding='same', bias=use_bias),
-            activation,
-            nn.MaxPool2d(pooling),
         )
-        # I don't know how to use ConvTranspose2d properly so this may be pretty bad
-        # TODO(christhetree): fix padding
         self.dec = nn.Sequential(
-            nn.ConvTranspose2d(8 * n_filters, 8 * n_filters, (4, 4), stride=pooling, padding=(1, 1), output_padding=(0, 1), bias=use_bias),
+            nn.ConvTranspose1d(2 * n_filters, n_filters, kernel, stride=pooling, output_padding=(1,)),
             activation,
-            nn.ConvTranspose2d(8 * n_filters, 4 * n_filters, (4, 4), stride=pooling, padding=(1, 1), output_padding=(0, 0), bias=use_bias),
+            nn.ConvTranspose1d(n_filters, n_channels, kernel, stride=pooling),
             activation,
-            nn.ConvTranspose2d(4 * n_filters, 2 * n_filters, (4, 4), stride=pooling, padding=(1, 1), output_padding=(0, 0), bias=use_bias),
-            activation,
-            nn.ConvTranspose2d(2 * n_filters, n_filters, (4, 4), stride=pooling, padding=(1, 1), output_padding=(1, 0), bias=use_bias),
-            activation,
-            nn.ConvTranspose2d(n_filters, 1, (1, 1), stride=(1, 1), padding=(0, 0), output_padding=(0, 0)),
-            nn.Tanh()
+            nn.ConvTranspose1d(n_channels, n_channels, (1,), stride=(1,)),
+            nn.Tanh(),
         )
 
         self.mae = nn.L1Loss(reduction='mean')
-        self.mse = nn.MSELoss(reduction='mean')
+        # self.mse = nn.MSELoss(reduction='mean')
 
     def forward(self, audio: T) -> (T, ...):
-        spec = self.stft(audio).unsqueeze(1)
+        spec = self.stft(audio)
         spec += EPS
         spec_norm = tr.log10(spec)
         spec_norm /= -math.log10(EPS)
         z = self.enc(spec_norm)
-        rec = self.dec(z).squeeze(1)
-        spec_norm = spec_norm.squeeze(1)
+        rec = self.dec(z)
         return spec_norm, rec
 
     def _step(self, audio: T, prefix: str) -> T:
-        spec_norm, rec = self.forward(audio)
+        spec_norm, rec_norm = self.forward(audio)
 
-        mae_loss = self.mae(rec, spec_norm)
-        mse_loss = self.mse(rec, spec_norm)
-        # log_cosh_loss = self.log_cosh(rec, spec_norm)
+        # spec = unnormalize_spec(spec_norm)
+        # rec = unnormalize_spec(rec_norm)
+        # diff = calc_diff_spec(spec, rec)
+        # diff_mean = diff.mean(dim=[1, 2])
+        # diff_std = diff.std(dim=[1, 2])
+        # diff_snr = diff_mean / diff_std
+        # snr_loss = 1 / tr.mean(diff_snr)
+        # snr_loss /= 100.0
+
+        mae_loss = self.mae(rec_norm, spec_norm)
+        # mse_loss = self.mse(rec_norm, spec_norm)
 
         loss = mae_loss
+        # loss = mae_loss + snr_loss
 
         self.log(f'{prefix}_loss',
                  loss,
                  on_step=False,
                  on_epoch=True,
                  prog_bar=True)
-        self.log(f'{prefix}_mse',
-                 mse_loss,
-                 on_step=True,
-                 on_epoch=True,
-                 prog_bar=True)
+        # self.log(f'{prefix}_mae',
+        #          mae_loss,
+        #          on_step=True,
+        #          on_epoch=True,
+        #          prog_bar=True)
+        # self.log(f'{prefix}_snr',
+        #          snr_loss,
+        #          on_step=True,
+        #          on_epoch=True,
+        #          prog_bar=True)
 
         return loss
 

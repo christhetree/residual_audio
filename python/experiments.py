@@ -1,7 +1,7 @@
 import logging
 import math
 import os
-import random
+from typing import List
 
 import pytorch_lightning as pl
 import soundfile as sf
@@ -10,6 +10,7 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from torch import Tensor as T
 from torch.utils.data import DataLoader, random_split
 from torchaudio.transforms import GriffinLim
+from tqdm import tqdm
 
 from audio_ae import SpecAE
 from config import PROC_AUDIO_DIR, BATCH_SIZE, NUM_WORKERS, OUT_DIR, GPU, \
@@ -21,11 +22,11 @@ logging.basicConfig()
 log = logging.getLogger(__name__)
 log.setLevel(level=os.environ.get('LOGLEVEL', 'INFO'))
 
-# tr.manual_seed(48)  # Set for reproducible results
+# tr.manual_seed(42)  # Set for reproducible results
 
 
-def train(experiment_name: str) -> None:
-    ae = SpecAE()
+def train(experiment_name: str, n_filters: int) -> None:
+    ae = SpecAE(n_filters=n_filters)
     val_split = 0.2
 
     paths = list(os.listdir(PROC_AUDIO_DIR))
@@ -66,13 +67,13 @@ def train(experiment_name: str) -> None:
     )
     es = EarlyStopping(monitor='val_loss',
                        mode='min',
-                       min_delta=0.0005,
+                       min_delta=0.001,
                        patience=8,
                        verbose=True)
 
     trainer = pl.Trainer(gpus=GPU,
                          progress_bar_refresh_rate=1,
-                         max_epochs=50,
+                         max_epochs=10,
                          log_every_n_steps=100,
                          callbacks=[cp, es])
     log.info('')
@@ -88,20 +89,20 @@ def unnormalize_spec(spec_norm: T, eps: float = EPS) -> T:
 
 
 # TODO(christhetree): experiment with different difference calculations
-def calc_diff_spec(spec: T, rec: T) -> T:
+def calc_diff_spec(spec: T, rec: T, alpha: float = 1.0) -> T:
     spec_max = tr.amax(spec, dim=[1, 2], keepdim=True)
     spec = spec / spec_max
 
     rec_max = tr.amax(rec, dim=[1, 2], keepdim=True)
     rec = rec / rec_max
 
-    diff = tr.clamp(spec - rec, 0.0)
+    diff = tr.clamp(spec - (alpha * rec), 0.0)
     diff *= tr.maximum(spec_max, rec_max)
 
     return diff
 
 
-def eval(model_name: str, n_samples: int = 4) -> None:
+def eval(model_name: str, alphas: List[float]) -> None:
     batch_size = GPU_BATCH_SIZE
     ae = SpecAE.load_from_checkpoint(os.path.join(OUT_DIR, model_name),
                                      batch_size=batch_size)
@@ -112,48 +113,37 @@ def eval(model_name: str, n_samples: int = 4) -> None:
              for f in paths if f.endswith('.pt')]
     dataset = PathsDataset(paths)
     eval_dl = DataLoader(dataset,
-                         batch_size=batch_size,
-                         shuffle=True,  # Set to false for reproducible results
+                         batch_size=1,
+                         shuffle=False,  # Set to false for reproducible results
                          drop_last=True)
-    batch = next(iter(eval_dl))
-
-    log.info(f'Performing inference on batch')
-    spec_norm, rec_norm = ae.forward(batch)
-    spec = unnormalize_spec(spec_norm)
-    rec = unnormalize_spec(rec_norm)
-    diff = calc_diff_spec(spec, rec)
-
     gl = GriffinLim(n_fft=N_FFT,
                     hop_length=HOP_LENGTH,
                     power=2.0)
 
-    for idx in random.sample(range(len(batch)), n_samples):
-        log.info(f'Sample batch idx: {idx}')
-        sf.write(os.path.join(OUT_DIR, f'{idx:>02}_orig.wav'),
-                 batch[idx].detach().numpy(),
-                 samplerate=SR)
+    for idx, batch in tqdm(enumerate(eval_dl)):
+        spec_norm, rec_norm = ae.forward(batch)
+        spec = unnormalize_spec(spec_norm)
+        rec = unnormalize_spec(rec_norm)
 
-        # GL operations are expensive
-        # spec_gl = gl(spec[idx].unsqueeze(0))
-        rec_gl = gl(rec[idx].unsqueeze(0)).squeeze(0)
-        diff_gl = gl(diff[idx].unsqueeze(0)).squeeze(0)
-        diff_gl_norm = normalize_waveform(diff_gl)
+        for alpha in alphas:
+            diff = calc_diff_spec(spec, rec, alpha)
 
-        # sf.write(os.path.join(OUT_DIR, f'{idx:>02}_spec_gl.wav'),
-        #          spec_gl[0].detach().numpy(),
-        #          samplerate=SR)
-        sf.write(os.path.join(OUT_DIR, f'{idx:>02}_rec_gl.wav'),
-                 rec_gl.detach().numpy(),
-                 samplerate=SR)
-        # sf.write(os.path.join(OUT_DIR, f'{idx:>02}_diff_gl.wav'),
-        #          diff_gl[0].detach().numpy(),
-        #          samplerate=SR)
-        sf.write(os.path.join(OUT_DIR, f'{idx:>02}_diff_gl_norm.wav'),
-                 diff_gl_norm.detach().numpy(),
-                 samplerate=SR)
+            diff_gl = gl(diff).squeeze(0)
+            diff_gl_norm = normalize_waveform(diff_gl)
+            save_name = f'{idx:>02}__{alpha:.3f}__diff_gl_norm.wav'
+
+            sf.write(os.path.join(OUT_DIR, save_name),
+                     diff_gl_norm.detach().numpy(),
+                     samplerate=SR)
 
 
 if __name__ == '__main__':
-    experiment_name = 'ae__video_mae_4layers_tanh'
-    train(experiment_name)
-    # eval('ae__video_mae_2layer_tanh__epoch=44__val_loss=0.024.ckpt')
+    # n_filters = 1
+    # experiment_name = f'ae__conv_2__filters_{n_filters}__stride_2'
+    # train(experiment_name, n_filters)
+
+    alphas = [0.0, 0.005, 0.02, 0.08, 0.32, 1.28]
+    eval(
+        'ae__conv_2__filters_1__stride_2__epoch=00__val_loss=0.179.ckpt',
+        alphas,
+    )

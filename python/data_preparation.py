@@ -11,7 +11,7 @@ from torch import Tensor as T
 from tqdm import tqdm
 
 from config import SR, N_SAMPLES, PEAK_VALUE, RAW_AUDIO_DIR, PROC_AUDIO_DIR, \
-    STEP_SIZE_SECONDS
+    STEP_SIZE_SECONDS, MAX_N_STEPS
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
@@ -63,6 +63,7 @@ def prepare_raw_audio(in_dir: str,
                       name: str,
                       out_dir: str = PROC_AUDIO_DIR,
                       step_size_seconds: float = STEP_SIZE_SECONDS,
+                      max_n_steps: int = MAX_N_STEPS,
                       save_wav: bool = False) -> None:
         try:
             audio, _ = lr.load(os.path.join(in_dir, name), sr=SR, mono=True)
@@ -70,7 +71,9 @@ def prepare_raw_audio(in_dir: str,
             log.warning(f'Failed to load: {name}')
             return
 
-        step_n_samples = int(step_size_seconds * SR)
+        min_n_samples_per_step = int(step_size_seconds * SR)
+        step_n_samples = len(audio) // max_n_steps
+        step_n_samples = max(min_n_samples_per_step, step_n_samples)
         n_steps = len(audio) // step_n_samples
         for idx in tqdm(range(n_steps)):
             start = idx * step_n_samples
@@ -95,9 +98,10 @@ def prepare_raw_audio(in_dir: str,
 
 
 if __name__ == '__main__':
-    prepare_raw_audio(
-        RAW_AUDIO_DIR,
-        'for_elise.wav',
-        # step_size_seconds=3.0,  # For less overlap in snippets
-        # save_wav=True  # For listening to the output
-    )
+    for name in tqdm(os.listdir(RAW_AUDIO_DIR)):
+        prepare_raw_audio(
+            RAW_AUDIO_DIR,
+            name,
+            # step_size_seconds=3.0,  # For less overlap in snippets
+            # save_wav=True  # For listening to the output
+        )
