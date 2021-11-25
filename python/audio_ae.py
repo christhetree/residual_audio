@@ -20,7 +20,7 @@ class SpecAE(pl.LightningModule):
     def __init__(self,
                  n_fft: int = N_FFT,
                  hop_length: int = HOP_LENGTH,
-                 n_filters: int = 32,
+                 n_filters: int = 1,
                  kernel: Tuple[int, int] = (4,),
                  pooling: Tuple[int, int] = (2,),
                  activation: nn.Module = nn.ELU()) -> None:
