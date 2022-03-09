@@ -11,7 +11,7 @@ from torch import Tensor as T
 from tqdm import tqdm
 
 from config import SR, N_SAMPLES, PEAK_VALUE, RAW_AUDIO_DIR, PROC_AUDIO_DIR, \
-    STEP_SIZE_SECONDS, MAX_N_STEPS
+    MAX_N_STEPS, STEP_SIZE_SAMPLES
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def prepare_short_audio(in_dir: str,
 def prepare_raw_audio(in_dir: str,
                       name: str,
                       out_dir: str = PROC_AUDIO_DIR,
-                      step_size_seconds: float = STEP_SIZE_SECONDS,
+                      step_size_samples: float = STEP_SIZE_SAMPLES,
                       max_n_steps: int = MAX_N_STEPS,
                       save_wav: bool = False) -> None:
         try:
@@ -71,7 +71,7 @@ def prepare_raw_audio(in_dir: str,
             log.warning(f'Failed to load: {name}')
             return
 
-        min_n_samples_per_step = int(step_size_seconds * SR)
+        min_n_samples_per_step = step_size_samples
         step_n_samples = len(audio) // max_n_steps
         step_n_samples = max(min_n_samples_per_step, step_n_samples)
         n_steps = len(audio) // step_n_samples
@@ -83,17 +83,17 @@ def prepare_raw_audio(in_dir: str,
                 break
 
             snippet = normalize_waveform(snippet)
+            t_snippet = tr.tensor(snippet)
+            if tr.isnan(t_snippet).any():
+                log.warning('NaN found!')
+                continue
+
             if save_wav:
                 sf.write(os.path.join(out_dir, f'{name[:-4]}__{idx:>05}.wav'),
                          snippet,
                          samplerate=SR)
 
-            snippet = tr.tensor(snippet)
-            if tr.isnan(snippet).any():
-                log.warning('NaN found!')
-                continue
-
-            tr.save(snippet,
+            tr.save(t_snippet,
                     os.path.join(out_dir, f'{name[:-4]}__{idx:>05}.pt'))
 
 
@@ -102,6 +102,7 @@ if __name__ == '__main__':
         prepare_raw_audio(
             RAW_AUDIO_DIR,
             name,
-            # step_size_seconds=3.0,  # For less overlap in snippets
-            # save_wav=True  # For listening to the output
+            max_n_steps=1,
+            save_wav=True,  # For listening to the output
+            step_size_samples=SR * 2,
         )

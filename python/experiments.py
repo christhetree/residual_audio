@@ -1,21 +1,22 @@
 import logging
 import math
 import os
+import random
 from typing import List
 
+import numpy as np
 import pytorch_lightning as pl
 import soundfile as sf
 import torch as tr
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from torch import Tensor as T
 from torch.utils.data import DataLoader, random_split
-from torchaudio.transforms import GriffinLim
+from torchaudio.transforms import Fade
 from tqdm import tqdm
 
-from audio_ae import SpecAE
+from audio_ae import SpecAE, ResidualAudioEffect
 from config import PROC_AUDIO_DIR, BATCH_SIZE, NUM_WORKERS, OUT_DIR, GPU, \
-    GPU_BATCH_SIZE, EPS, SR, N_FFT, HOP_LENGTH
-from data_preparation import normalize_waveform
+    EPS, SR, N_SAMPLES
 from datasets import PathsDataset
 
 logging.basicConfig()
@@ -73,8 +74,8 @@ def train(experiment_name: str, n_filters: int) -> None:
 
     trainer = pl.Trainer(gpus=GPU,
                          progress_bar_refresh_rate=1,
-                         max_epochs=10,
-                         log_every_n_steps=100,
+                         max_epochs=1,
+                         log_every_n_steps=50,
                          callbacks=[cp, es])
     log.info('')
     log.info(f'====================== {experiment_name} ======================')
@@ -103,47 +104,64 @@ def calc_diff_spec(spec: T, rec: T, alpha: float = 1.0) -> T:
 
 
 def eval(model_name: str, alphas: List[float]) -> None:
-    batch_size = GPU_BATCH_SIZE
+    batch_size = BATCH_SIZE
     ae = SpecAE.load_from_checkpoint(os.path.join(OUT_DIR, model_name),
                                      batch_size=batch_size)
+    ra_effect = ResidualAudioEffect(ae)
+    # script = ra_effect.to_torchscript()
+    # tr.jit.save(script, os.path.join(OUT_DIR, 'script_2048_samples.pt'))
+    # exit()
 
     # I evaluate locally with different test files
     paths = list(os.listdir(PROC_AUDIO_DIR))
     paths = [os.path.join(PROC_AUDIO_DIR, f)
              for f in paths if f.endswith('.pt')]
+    random.shuffle(paths)
     dataset = PathsDataset(paths)
     eval_dl = DataLoader(dataset,
                          batch_size=1,
                          shuffle=False,  # Set to false for reproducible results
                          drop_last=True)
-    gl = GriffinLim(n_fft=N_FFT,
-                    hop_length=HOP_LENGTH,
-                    power=2.0)
+    overlap_samples = N_SAMPLES // 4
+    fade = Fade(overlap_samples, overlap_samples)
 
-    for idx, batch in tqdm(enumerate(eval_dl)):
-        spec_norm, rec_norm = ae.forward(batch)
-        spec = unnormalize_spec(spec_norm)
-        rec = unnormalize_spec(rec_norm)
-
+    for idx, (path, batch) in tqdm(enumerate(zip(paths, eval_dl))):
+        file_name = os.path.basename(path)
         for alpha in alphas:
-            diff = calc_diff_spec(spec, rec, alpha)
+            buffers = []
+            batch = batch.squeeze(0)
+            n_steps = len(batch) // (N_SAMPLES - overlap_samples)
+            for buffer_idx in range(0, n_steps - 1):
+                start_idx = buffer_idx * (N_SAMPLES - overlap_samples)
+                end_idx = start_idx + N_SAMPLES
+                audio = batch[start_idx:end_idx]
+                diff_gl = ra_effect(audio, tr.tensor(alpha))
+                buffers.append(diff_gl.detach())
 
-            diff_gl = gl(diff).squeeze(0)
-            diff_gl_norm = normalize_waveform(diff_gl)
-            save_name = f'{idx:>02}__{alpha:.3f}__diff_gl_norm.wav'
+            buffers = [fade(b).numpy() for b in buffers]
+            new_buffers = []
+            for idx, b in enumerate(buffers[:-1]):
+                next_b = buffers[idx + 1]
+                b[-overlap_samples:] += next_b[:overlap_samples]
+                new_b = b[overlap_samples:]
+                new_buffers.append(new_b)
 
+            save_name = f'{file_name}__{alpha:.3f}__diff_gl.wav'
+            out_audio = np.concatenate(new_buffers)
             sf.write(os.path.join(OUT_DIR, save_name),
-                     diff_gl_norm.detach().numpy(),
+                     out_audio,
                      samplerate=SR)
 
 
 if __name__ == '__main__':
     # n_filters = 1
-    # experiment_name = f'ae__conv_2__filters_{n_filters}__stride_2'
+    # experiment_name = f'ae__samples_{N_SAMPLES}__conv_2__filters_{n_filters}__stride_2'
     # train(experiment_name, n_filters)
+    # exit()
 
-    alphas = [0.0, 0.005, 0.02, 0.08, 0.32, 1.28]
+    # alphas = [0.0, 0.005, 0.02, 0.08, 0.32, 1.28]
+    alphas = [0.0, 0.02, 0.1, 0.5, 1.0]
     eval(
-        'ae__conv_2__filters_1__stride_2__epoch=00__val_loss=0.179.ckpt',
+        'ae__samples_2048__conv_2__filters_1__stride_2__epoch=00__val_loss=0.197.ckpt',
         alphas,
     )
