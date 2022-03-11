@@ -192,10 +192,10 @@ class RealtimeSTFT(nn.Module):
             log.warning('Flushing is not necessary when fade_n_samples == 0')
         return audio_out
 
-    def forward(self, audio: T) -> (T, T):
+    def forward(self, audio: T) -> T:
         spec = self.audio_to_spec(audio)
         rec_audio = self.spec_to_audio(spec)
-        return spec, rec_audio
+        return rec_audio
 
 
 def process_file(path: str, rts: RealtimeSTFT, sr: int = SR) -> None:
@@ -209,7 +209,7 @@ def process_file(path: str, rts: RealtimeSTFT, sr: int = SR) -> None:
     for idx in tqdm(range(n_steps)):
         start_idx = idx * rts.io_n_samples
         chunk_in = audio_pt[:, start_idx:start_idx + io_n_samples]
-        _, chunk_out = rts(chunk_in)
+        chunk_out = rts(chunk_in)
         audio_chunk = chunk_out[0].numpy()
         audio_out.append(audio_chunk)
 
@@ -232,10 +232,14 @@ if __name__ == '__main__':
     hop_length = 512
     io_n_samples = 512
     n_fft = 2048
+    # hop_length = 4
+    # io_n_samples = 4
+    # n_fft = 16
     model_io_n_frames = 16
     fade_n_samples = 0
     power = 2.0
     use_phase_info = True
+    audio_n_frames = 16
 
     rts = RealtimeSTFT(
         batch_size,
@@ -249,28 +253,24 @@ if __name__ == '__main__':
     )
 
     audio_dir = '/Users/puntland/local_christhetree/qosmo/residual_audio/data/raw_eval'
-    audio_paths = [os.path.join(audio_dir, _) for _ in os.listdir(audio_dir) 
+    audio_paths = [os.path.join(audio_dir, _) for _ in os.listdir(audio_dir)
                    if _.endswith('.wav')]
     for path in audio_paths:
         process_file(path, rts)
 
-    # audio_n_frames = 16
     # audio = tr.rand((batch_size, hop_length * audio_n_frames))
     # assert audio_n_frames % rts.io_n_frames == 0
     #
     # all_spec = rts.stft(audio)
+    # all_spec = all_spec.abs().pow(power)
     #
     # chunked_spec = None
-    # audio_out = []
     # n_steps = (hop_length * audio_n_frames) // io_n_samples
     # for idx in range(n_steps):
     #     start_idx = idx * io_n_samples
     #     chunk_in = audio[:, start_idx:start_idx + io_n_samples]
-    #     chunked_spec, chunk_out = rts(chunk_in)
+    #     chunked_spec = rts.audio_to_spec(chunk_in)
     #     # print(np.allclose(chunk_in.numpy(), chunk_out.numpy()))
-    #     audio_out.append(chunk_out.numpy())
-    #
-    # audio_out = np.concatenate(audio_out, axis=1)
     #
     # all_np = all_spec.numpy()[0]
     # chunked_np = chunked_spec.numpy()[0]
