@@ -1,5 +1,6 @@
 import logging
 import os
+from typing import Optional
 
 import librosa as lr
 import numpy as np
@@ -21,31 +22,38 @@ SR = 44100
 
 class RealtimeSTFT(nn.Module):
     def __init__(self,
-                 batch_size: int,
+                 batch_size: int = 1,
                  io_n_samples: int = 512,
                  n_fft: int = 2048,
                  hop_length: int = 512,
                  model_io_n_frames: int = 16,
-                 crossfade_n_samples: int = 0,
+                 power: Optional[float] = None,
+                 use_phase_info: bool = True,
+                 fade_n_samples: int = 0,
                  eps: float = 1e-7) -> None:
         super().__init__()
         assert io_n_samples >= hop_length
         assert io_n_samples % hop_length == 0
         assert n_fft % 2 == 0
         assert (n_fft // 2) % hop_length == 0
-        assert crossfade_n_samples <= io_n_samples
+        assert power is None or power >= 1.0
+        assert fade_n_samples <= io_n_samples
         self.batch_size = batch_size
         self.io_n_samples = io_n_samples
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.model_io_n_frames = model_io_n_frames
-        self.fade_n_samples = crossfade_n_samples
+        self.power = power
+        self.use_phase_info = use_phase_info
+        self.fade_n_samples = fade_n_samples
         self.eps = eps
 
         self.io_n_frames = self.io_n_samples // self.hop_length
         self.overlap_n_frames = self.n_fft // 2 // self.hop_length
         self.in_buf_n_frames = (self.overlap_n_frames * 2) - 1 + self.io_n_frames
         self.n_bins = (self.n_fft // 2) + 1
+        self.stft_out_shape = (self.batch_size, self.n_bins, self.in_buf_n_frames + 1)
+        self.spec_shape = (self.batch_size, self.n_bins, self.model_io_n_frames)
         self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
         assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_length
 
@@ -61,28 +69,38 @@ class RealtimeSTFT(nn.Module):
                                         pad=0,
                                         center=True,
                                         normalized=False)
-        self.gl = GriffinLim(n_fft=self.n_fft,
-                             hop_length=self.hop_length,
-                             power=2.0,
-                             n_iter=4)
 
         self.in_buf = tr.full(
             (self.batch_size, self.in_buf_n_frames * self.hop_length),
             self.eps,
         )
         self.tmp_in_buf = tr.clone(self.in_buf)
-        self.frames_buf = None
-        self.tmp_frames_buf = None
+
+        self.stft_f_buf = tr.full(self.stft_out_shape, self.eps)
+        self.frames_buf = tr.full(self.spec_shape, self.eps)
+        self.tmp_frames_buf = tr.clone(self.frames_buf)
+
+        self.stft_p_buf = tr.zeros(self.stft_out_shape)
+        self.phase_buf = tr.zeros(self.spec_shape)
+        self.tmp_phase_buf = tr.clone(self.phase_buf)
+
+        self.out_frames_buf = tr.full(
+            (self.batch_size, self.n_bins, self.in_buf_n_frames),
+            self.eps,
+            dtype=tr.complex64,
+        )
         self.out_buf = tr.full(
             (self.batch_size, self.out_buf_n_samples),
             self.eps,
         )
+        self.reset()
+
         self.fade_up = None
         self.fade_down = None
         if self.fade_n_samples > 0:
             self.fade_up = tr.linspace(0, 1, self.fade_n_samples)
             self.fade_down = tr.linspace(1, 0, self.fade_n_samples)
-        self.reset()
+        self.zero_phase = tr.zeros(self.spec_shape)
 
     @property
     def min_delay_samples(self) -> int:
@@ -91,13 +109,32 @@ class RealtimeSTFT(nn.Module):
     def reset(self) -> None:
         self.in_buf.fill_(self.eps)
         self.tmp_in_buf.fill_(self.eps)
-        # TODO(christhetree): prevent this memory allocation
-        self.frames_buf = self.stft(tr.full(
-            (self.batch_size, (self.model_io_n_frames * self.hop_length) - 1),
-            self.eps)
-        )
-        self.tmp_frames_buf = tr.clone(self.frames_buf)
+        self.stft_f_buf.fill_(self.eps)
+        self.frames_buf.fill_(self.eps)
+        self.tmp_frames_buf.fill_(self.eps)
+        self.stft_p_buf.fill_(0)
+        self.phase_buf.fill_(0)
+        self.tmp_phase_buf.fill_(0)
+        self.out_frames_buf.fill_(self.eps)
         self.out_buf.fill_(self.eps)
+
+    def _update_mag_or_phase_buffers(self,
+                                     stft_out_buf: T,
+                                     frames_buf: T,
+                                     tmp_frames_buf: T) -> None:
+        # Remove overlap frames we have computed before
+        frames = stft_out_buf[:, :, self.overlap_n_frames:]
+        # Identify frames that are more correct due to missing prev audio info
+        fixed_prev_frames = frames[:, :, :-self.io_n_frames]
+        assert fixed_prev_frames.shape[2] == self.overlap_n_frames
+        # Identify the new frames for the input audio chunk
+        new_frames = frames[:, :, -self.io_n_frames:]
+        # Overwrite previous frames with more correct frames
+        frames_buf[:, :, -self.overlap_n_frames:] = fixed_prev_frames
+        # Shift buffer left and insert new frames without allocating memory
+        tmp_frames_buf[:, :, :-self.io_n_frames] = frames_buf[:, :, self.io_n_frames:]
+        frames_buf[:, :, :-self.io_n_frames] = tmp_frames_buf[:, :, :-self.io_n_frames]
+        frames_buf[:, :, -self.io_n_frames:] = new_frames
 
     def audio_to_spec(self, audio: T) -> T:
         assert audio.shape == (self.batch_size, self.io_n_samples)
@@ -105,28 +142,44 @@ class RealtimeSTFT(nn.Module):
         self.tmp_in_buf[:, :-self.io_n_samples] = self.in_buf[:, self.io_n_samples:]
         self.in_buf[:, :-self.io_n_samples] = self.tmp_in_buf[:, :-self.io_n_samples]
         self.in_buf[:, -self.io_n_samples:] = audio
-        frames = self.stft(self.in_buf)
-        # Remove overlap frames we have computed before
-        frames = frames[:, :, self.overlap_n_frames:]
-        # Identify frames that are more correct due to missing prev audio info
-        fixed_prev_frames = frames[:, :, :-self.io_n_frames]
-        assert fixed_prev_frames.shape[2] == self.overlap_n_frames
-        # Identify the new frames for the input audio chunk
-        new_frames = frames[:, :, -self.io_n_frames:]
-        # Overwrite previous frames with more correct frames
-        self.frames_buf[:, :, -self.overlap_n_frames:] = fixed_prev_frames
-        # Shift buffer left and insert new frames without allocating memory
-        self.tmp_frames_buf[:, :, :-self.io_n_frames] = self.frames_buf[:, :, self.io_n_frames:]
-        self.frames_buf[:, :, :-self.io_n_frames] = self.tmp_frames_buf[:, :, :-self.io_n_frames]
-        self.frames_buf[:, :, -self.io_n_frames:] = new_frames
+
+        complex_frames = self.stft(self.in_buf)
+        if self.power is None:
+            self.stft_f_buf = complex_frames.real
+        else:
+            tr.abs(complex_frames, out=self.stft_f_buf)
+            if self.power != 1.0:
+                tr.pow(self.stft_f_buf, self.power, out=self.stft_f_buf)
+        self._update_mag_or_phase_buffers(
+            self.stft_f_buf, self.frames_buf, self.tmp_frames_buf)
+
+        if self.use_phase_info:
+            if self.power is None:
+                self.stft_p_buf = complex_frames.imag
+            else:
+                tr.angle(complex_frames, out=self.stft_p_buf)
+            self._update_mag_or_phase_buffers(
+                self.stft_p_buf, self.phase_buf, self.tmp_phase_buf)
+
         return self.frames_buf
 
     def spec_to_audio(self, spec: T) -> T:
-        assert spec.shape == (self.batch_size,
-                              self.n_bins,
-                              self.model_io_n_frames)
+        assert spec.shape == self.spec_shape
         spec = spec[:, :, -self.in_buf_n_frames:]
-        rec_audio = self.istft(spec)
+        if self.use_phase_info:
+            phase = self.phase_buf[:, :, -self.in_buf_n_frames:]
+        else:
+            phase = self.zero_phase[:, :, -self.in_buf_n_frames:]
+
+        if self.power is None:
+            self.out_frames_buf.real = spec
+            self.out_frames_buf.imag = phase
+        else:
+            if self.power != 1.0:
+                tr.pow(spec, 1 / self.power, out=spec)
+            tr.polar(spec, phase, out=self.out_frames_buf)
+
+        rec_audio = self.istft(self.out_frames_buf)
         rec_audio = rec_audio[:, -self.out_buf_n_samples:]
         if self.fade_n_samples == 0:
             return rec_audio
@@ -143,20 +196,12 @@ class RealtimeSTFT(nn.Module):
         audio_out = tr.full((self.batch_size, self.io_n_samples), self.eps)
         if self.fade_n_samples > 0:
             audio_out[:, :self.fade_n_samples] = self.out_buf[:, -self.fade_n_samples:]
+        else:
+            log.warning('Flushing is not necessary when fade_n_samples == 0')
         return audio_out
 
     def forward(self, audio: T) -> (T, T):
         spec = self.audio_to_spec(audio)
-        # derp = tr.zeros_like(spec)
-        # mag = tr.abs(spec)
-        # tr.abs(spec, out=derp)
-        # phase = tr.angle(spec)
-        # rec_spec = tr.polar(mag, phase)
-        # spec.real = tr.tensor(0.0)
-        # spec.imag = tr.tensor(0.0)
-        # spec = spec.abs()
-        # cspec = tr.complex(spec, tr.zeros_like(spec))
-        # rec_audio = self.spec_to_audio(cspec)
         rec_audio = self.spec_to_audio(spec)
         return spec, rec_audio
 
@@ -196,14 +241,19 @@ if __name__ == '__main__':
     io_n_samples = 512
     n_fft = 2048
     model_io_n_frames = 16
-    crossfade_n_samples = 64
+    fade_n_samples = 0
+    power = 2.0
+    use_phase_info = True
+
     rts = RealtimeSTFT(
         batch_size,
         io_n_samples,
         n_fft,
         hop_length,
         model_io_n_frames,
-        crossfade_n_samples
+        power,
+        use_phase_info,
+        fade_n_samples
     )
 
     audio_dir = '/Users/puntland/local_christhetree/qosmo/residual_audio/data/raw_eval'
