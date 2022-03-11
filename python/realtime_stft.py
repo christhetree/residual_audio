@@ -53,7 +53,7 @@ class RealtimeSTFT(nn.Module):
         self.in_buf_n_frames = (self.overlap_n_frames * 2) - 1 + self.io_n_frames
         self.n_bins = (self.n_fft // 2) + 1
         self.stft_out_shape = (self.batch_size, self.n_bins, self.in_buf_n_frames + 1)
-        self.spec_shape = (self.batch_size, self.n_bins, self.model_io_n_frames)
+        self.model_io_shape = (self.batch_size, self.n_bins, self.model_io_n_frames)
         self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
         assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_length
 
@@ -76,12 +76,12 @@ class RealtimeSTFT(nn.Module):
         )
         self.tmp_in_buf = tr.clone(self.in_buf)
 
-        self.stft_f_buf = tr.full(self.stft_out_shape, self.eps)
-        self.frames_buf = tr.full(self.spec_shape, self.eps)
-        self.tmp_frames_buf = tr.clone(self.frames_buf)
+        self.stft_mag_buf = tr.full(self.stft_out_shape, self.eps)
+        self.mag_buf = tr.full(self.model_io_shape, self.eps)
+        self.tmp_mag_buf = tr.clone(self.mag_buf)
 
-        self.stft_p_buf = tr.zeros(self.stft_out_shape)
-        self.phase_buf = tr.zeros(self.spec_shape)
+        self.stft_phase_buf = tr.zeros(self.stft_out_shape)
+        self.phase_buf = tr.zeros(self.model_io_shape)
         self.tmp_phase_buf = tr.clone(self.phase_buf)
 
         self.out_frames_buf = tr.full(
@@ -100,7 +100,7 @@ class RealtimeSTFT(nn.Module):
         if self.fade_n_samples > 0:
             self.fade_up = tr.linspace(0, 1, self.fade_n_samples)
             self.fade_down = tr.linspace(1, 0, self.fade_n_samples)
-        self.zero_phase = tr.zeros(self.spec_shape)
+        self.zero_phase = tr.zeros(self.model_io_shape)
 
     @property
     def min_delay_samples(self) -> int:
@@ -109,10 +109,10 @@ class RealtimeSTFT(nn.Module):
     def reset(self) -> None:
         self.in_buf.fill_(self.eps)
         self.tmp_in_buf.fill_(self.eps)
-        self.stft_f_buf.fill_(self.eps)
-        self.frames_buf.fill_(self.eps)
-        self.tmp_frames_buf.fill_(self.eps)
-        self.stft_p_buf.fill_(0)
+        self.stft_mag_buf.fill_(self.eps)
+        self.mag_buf.fill_(self.eps)
+        self.tmp_mag_buf.fill_(self.eps)
+        self.stft_phase_buf.fill_(0)
         self.phase_buf.fill_(0)
         self.tmp_phase_buf.fill_(0)
         self.out_frames_buf.fill_(self.eps)
@@ -145,26 +145,26 @@ class RealtimeSTFT(nn.Module):
 
         complex_frames = self.stft(self.in_buf)
         if self.power is None:
-            self.stft_f_buf = complex_frames.real
+            self.stft_mag_buf = complex_frames.real
         else:
-            tr.abs(complex_frames, out=self.stft_f_buf)
+            tr.abs(complex_frames, out=self.stft_mag_buf)
             if self.power != 1.0:
-                tr.pow(self.stft_f_buf, self.power, out=self.stft_f_buf)
+                tr.pow(self.stft_mag_buf, self.power, out=self.stft_mag_buf)
         self._update_mag_or_phase_buffers(
-            self.stft_f_buf, self.frames_buf, self.tmp_frames_buf)
+            self.stft_mag_buf, self.mag_buf, self.tmp_mag_buf)
 
         if self.use_phase_info:
             if self.power is None:
-                self.stft_p_buf = complex_frames.imag
+                self.stft_phase_buf = complex_frames.imag
             else:
-                tr.angle(complex_frames, out=self.stft_p_buf)
+                tr.angle(complex_frames, out=self.stft_phase_buf)
             self._update_mag_or_phase_buffers(
-                self.stft_p_buf, self.phase_buf, self.tmp_phase_buf)
+                self.stft_phase_buf, self.phase_buf, self.tmp_phase_buf)
 
-        return self.frames_buf
+        return self.mag_buf
 
     def spec_to_audio(self, spec: T) -> T:
-        assert spec.shape == self.spec_shape
+        assert spec.shape == self.model_io_shape
         spec = spec[:, :, -self.in_buf_n_frames:]
         if self.use_phase_info:
             phase = self.phase_buf[:, :, -self.in_buf_n_frames:]
