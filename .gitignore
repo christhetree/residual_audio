@@ -201,3 +201,4 @@ pip-selfcheck.json
 data/
 out/
 lightning_logs/
+scratch.py
