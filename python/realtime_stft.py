@@ -74,15 +74,12 @@ class RealtimeSTFT(nn.Module):
             (self.batch_size, self.in_buf_n_frames * self.hop_length),
             self.eps,
         )
-        self.tmp_in_buf = tr.clone(self.in_buf)
 
         self.stft_mag_buf = tr.full(self.stft_out_shape, self.eps)
         self.mag_buf = tr.full(self.model_io_shape, self.eps)
-        self.tmp_mag_buf = tr.clone(self.mag_buf)
 
         self.stft_phase_buf = tr.zeros(self.stft_out_shape)
         self.phase_buf = tr.zeros(self.model_io_shape)
-        self.tmp_phase_buf = tr.clone(self.phase_buf)
 
         self.out_frames_buf = tr.full(
             (self.batch_size, self.n_bins, self.in_buf_n_frames),
@@ -108,20 +105,16 @@ class RealtimeSTFT(nn.Module):
 
     def reset(self) -> None:
         self.in_buf.fill_(self.eps)
-        self.tmp_in_buf.fill_(self.eps)
         self.stft_mag_buf.fill_(self.eps)
         self.mag_buf.fill_(self.eps)
-        self.tmp_mag_buf.fill_(self.eps)
         self.stft_phase_buf.fill_(0)
         self.phase_buf.fill_(0)
-        self.tmp_phase_buf.fill_(0)
         self.out_frames_buf.fill_(self.eps)
         self.out_buf.fill_(self.eps)
 
     def _update_mag_or_phase_buffers(self,
                                      stft_out_buf: T,
-                                     frames_buf: T,
-                                     tmp_frames_buf: T) -> None:
+                                     frames_buf: T) -> T:
         # Remove overlap frames we have computed before
         frames = stft_out_buf[:, :, self.overlap_n_frames:]
         # Identify frames that are more correct due to missing prev audio info
@@ -131,16 +124,15 @@ class RealtimeSTFT(nn.Module):
         new_frames = frames[:, :, -self.io_n_frames:]
         # Overwrite previous frames with more correct frames
         frames_buf[:, :, -self.overlap_n_frames:] = fixed_prev_frames
-        # Shift buffer left and insert new frames without allocating memory
-        tmp_frames_buf[:, :, :-self.io_n_frames] = frames_buf[:, :, self.io_n_frames:]
-        frames_buf[:, :, :-self.io_n_frames] = tmp_frames_buf[:, :, :-self.io_n_frames]
+        # Shift buffer left and insert new frames
+        frames_buf = tr.roll(frames_buf, -self.io_n_frames, dims=2)
         frames_buf[:, :, -self.io_n_frames:] = new_frames
+        return frames_buf
 
     def audio_to_spec(self, audio: T) -> T:
         assert audio.shape == (self.batch_size, self.io_n_samples)
-        # Shift buffer left and insert audio chunk without allocating memory
-        self.tmp_in_buf[:, :-self.io_n_samples] = self.in_buf[:, self.io_n_samples:]
-        self.in_buf[:, :-self.io_n_samples] = self.tmp_in_buf[:, :-self.io_n_samples]
+        # Shift buffer left and insert audio chunk
+        self.in_buf = tr.roll(self.in_buf, -self.io_n_samples, dims=1)
         self.in_buf[:, -self.io_n_samples:] = audio
 
         complex_frames = self.stft(self.in_buf)
@@ -150,16 +142,16 @@ class RealtimeSTFT(nn.Module):
             tr.abs(complex_frames, out=self.stft_mag_buf)
             if self.power != 1.0:
                 tr.pow(self.stft_mag_buf, self.power, out=self.stft_mag_buf)
-        self._update_mag_or_phase_buffers(
-            self.stft_mag_buf, self.mag_buf, self.tmp_mag_buf)
+        self.mag_buf = self._update_mag_or_phase_buffers(self.stft_mag_buf,
+                                                         self.mag_buf)
 
         if self.use_phase_info:
             if self.power is None:
                 self.stft_phase_buf = complex_frames.imag
             else:
                 tr.angle(complex_frames, out=self.stft_phase_buf)
-            self._update_mag_or_phase_buffers(
-                self.stft_phase_buf, self.phase_buf, self.tmp_phase_buf)
+            self.phase_buf = self._update_mag_or_phase_buffers(
+                self.stft_phase_buf, self.phase_buf)
 
         return self.mag_buf
 
