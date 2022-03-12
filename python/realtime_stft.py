@@ -8,29 +8,33 @@ import soundfile as sf
 import torch as tr
 from torch import Tensor as T
 from torch import nn
-from torchaudio.transforms import Spectrogram, InverseSpectrogram, GriffinLim
+from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from tqdm import tqdm
 
 from python.config import OUT_DIR
+from python.modeling import SpecCNN
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
 log.setLevel(level=os.environ.get('LOGLEVEL', 'INFO'))
 
+EPS = 1e-8
 SR = 44100
 
 
 class RealtimeSTFT(nn.Module):
     def __init__(self,
+                 model: Optional[nn.Module] = None,
                  batch_size: int = 1,
                  io_n_samples: int = 512,
                  n_fft: int = 2048,
                  hop_length: int = 512,
                  model_io_n_frames: int = 16,
-                 power: Optional[float] = None,
+                 power: Optional[float] = 1.0,
+                 logarithmize: bool = True,
                  use_phase_info: bool = True,
                  fade_n_samples: int = 0,
-                 eps: float = 1e-7) -> None:
+                 eps: float = EPS) -> None:
         super().__init__()
         assert io_n_samples >= hop_length
         assert io_n_samples % hop_length == 0
@@ -38,12 +42,14 @@ class RealtimeSTFT(nn.Module):
         assert (n_fft // 2) % hop_length == 0
         assert power is None or power >= 1.0
         assert fade_n_samples <= io_n_samples
+        self.model = model
         self.batch_size = batch_size
         self.io_n_samples = io_n_samples
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.model_io_n_frames = model_io_n_frames
         self.power = power
+        self.logarithmize = logarithmize
         self.use_phase_info = use_phase_info
         self.fade_n_samples = fade_n_samples
         self.eps = eps
@@ -57,6 +63,7 @@ class RealtimeSTFT(nn.Module):
         self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
         assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_length
 
+        # TODO(christhetree): implement center=False case
         self.stft = Spectrogram(n_fft=self.n_fft,
                                 hop_length=self.hop_length,
                                 pad=0,
@@ -129,6 +136,24 @@ class RealtimeSTFT(nn.Module):
         frames_buf[:, :, -self.io_n_frames:] = new_frames
         return frames_buf
 
+    def audio_to_spec_offline(self, audio: T) -> T:
+        assert audio.shape[0] == self.batch_size
+        assert audio.shape[1] >= self.n_fft
+        assert audio.shape[1] % self.hop_length == 0
+        spec = self.stft(audio)
+        if self.power is None:
+            spec = spec.real
+        else:
+            spec = spec.abs()
+            if self.power != 1.0:
+                spec = spec.pow(self.power)
+
+        if self.logarithmize:
+            spec = tr.clamp(spec, min=self.eps)
+            spec = tr.log10(spec)
+
+        return spec
+
     def audio_to_spec(self, audio: T) -> T:
         assert audio.shape == (self.batch_size, self.io_n_samples)
         # Shift buffer left and insert audio chunk
@@ -142,6 +167,9 @@ class RealtimeSTFT(nn.Module):
             tr.abs(complex_frames, out=self.stft_mag_buf)
             if self.power != 1.0:
                 tr.pow(self.stft_mag_buf, self.power, out=self.stft_mag_buf)
+        if self.logarithmize:
+            self._logarithmize_spec(self.stft_mag_buf)
+
         self.mag_buf = self._update_mag_or_phase_buffers(self.stft_mag_buf,
                                                          self.mag_buf)
 
@@ -163,6 +191,9 @@ class RealtimeSTFT(nn.Module):
         else:
             phase = self.zero_phase[:, :, -self.in_buf_n_frames:]
 
+        if self.logarithmize:
+            self._unlogarithmize_spec(spec)
+
         if self.power is None:
             self.out_frames_buf.real = spec
             self.out_frames_buf.imag = phase
@@ -183,6 +214,14 @@ class RealtimeSTFT(nn.Module):
         self.out_buf = rec_audio
         return audio_out
 
+    def _logarithmize_spec(self, spec: T) -> None:
+        tr.clamp(spec, min=self.eps, out=spec)
+        tr.log10(spec, out=spec)
+
+    def _unlogarithmize_spec(self, spec: T) -> None:
+        tr.pow(10, spec, out=spec)
+        tr.clamp(spec, min=self.eps, out=spec)
+
     def flush(self) -> T:
         # TODO(christhetree): prevent this memory allocation
         audio_out = tr.full((self.batch_size, self.io_n_samples), self.eps)
@@ -192,8 +231,11 @@ class RealtimeSTFT(nn.Module):
             log.warning('Flushing is not necessary when fade_n_samples == 0')
         return audio_out
 
+    @tr.no_grad()
     def forward(self, audio: T) -> T:
         spec = self.audio_to_spec(audio)
+        if self.model is not None:
+            spec = self.model(spec)
         rec_audio = self.spec_to_audio(spec)
         return rec_audio
 
@@ -228,6 +270,8 @@ def process_file(path: str, rts: RealtimeSTFT, sr: int = SR) -> None:
 
 
 if __name__ == '__main__':
+    model = None
+    # model = SpecCNN()
     batch_size = 1
     hop_length = 512
     io_n_samples = 512
@@ -237,19 +281,22 @@ if __name__ == '__main__':
     # n_fft = 16
     model_io_n_frames = 16
     fade_n_samples = 0
-    power = 2.0
+    power = 1.0
+    logarithmize = True
     use_phase_info = True
     audio_n_frames = 16
 
     rts = RealtimeSTFT(
+        model,
         batch_size,
         io_n_samples,
         n_fft,
         hop_length,
         model_io_n_frames,
         power,
+        logarithmize,
         use_phase_info,
-        fade_n_samples
+        fade_n_samples,
     )
 
     audio_dir = '/Users/puntland/local_christhetree/qosmo/residual_audio/data/raw_eval'
