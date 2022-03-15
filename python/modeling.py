@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Tuple
 
+import torch as tr
 from torch import Tensor as T, nn
 
 logging.basicConfig()
@@ -27,7 +28,7 @@ class SpecCNN1D(nn.Module):
             nn.ConvTranspose1d(n_channels // 4, n_channels // 2, kernel, stride=pooling, padding=padding, output_padding=(1,)),
             activation,
             nn.ConvTranspose1d(n_channels // 2, n_channels, kernel, stride=pooling, padding=padding, output_padding=(1,)),
-            activation,
+            # activation,
         )
 
     def forward(self, spec: T) -> T:
@@ -38,7 +39,7 @@ class SpecCNN1D(nn.Module):
 
 class SpecCNN2D(nn.Module):
     def __init__(self,
-                 n_filters: int = 16,
+                 n_filters: int = 64,
                  kernel: Tuple[int] = (3, 3),
                  pooling: Tuple[int] = (2, 2),
                  activation: nn.Module = nn.ELU()) -> None:
@@ -56,7 +57,7 @@ class SpecCNN2D(nn.Module):
             nn.ConvTranspose2d(n_filters, n_filters, kernel, stride=pooling, padding=padding, output_padding=(0, 1)),
             activation,
             nn.ConvTranspose2d(n_filters, 1, kernel, stride=(1, 1), padding=padding),
-            nn.Tanh(),
+            # nn.Tanh(),
         )
 
     def forward(self, spec: T) -> T:
@@ -64,4 +65,25 @@ class SpecCNN2D(nn.Module):
         z = self.enc(spec)
         rec = self.dec(z)
         rec = rec.squeeze(1)
+        return rec
+
+
+class SpecMLP(nn.Module):
+    def __init__(self,
+                 n_channels: int = 1025,
+                 activation: nn.Module = nn.ELU()) -> None:
+        super().__init__()
+        self.enc = nn.Sequential(
+            nn.Linear(n_channels, n_channels // 2),
+            activation,
+        )
+        self.dec = nn.Sequential(
+            nn.Linear(n_channels // 2, n_channels),
+        )
+
+    def forward(self, spec: T) -> T:
+        spec = tr.swapaxes(spec, 1, 2)
+        z = self.enc(spec)
+        rec = self.dec(z)
+        rec = tr.swapaxes(rec, 1, 2)
         return rec
