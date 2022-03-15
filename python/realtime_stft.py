@@ -11,15 +11,12 @@ from torch import nn
 from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from tqdm import tqdm
 
-from python.config import OUT_DIR
-from python.modeling import SpecCNN2D
+from config import OUT_DIR, EPS, SR
+from modeling import SpecCNN2D
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
 log.setLevel(level=os.environ.get('LOGLEVEL', 'INFO'))
-
-EPS = 1e-8
-SR = 44100
 
 
 class RealtimeSTFT(nn.Module):
@@ -28,7 +25,7 @@ class RealtimeSTFT(nn.Module):
                  batch_size: int = 1,
                  io_n_samples: int = 512,
                  n_fft: int = 2048,
-                 hop_length: int = 512,
+                 hop_len: int = 512,
                  model_io_n_frames: int = 16,
                  power: Optional[float] = 1.0,
                  logarithmize: bool = True,
@@ -36,10 +33,10 @@ class RealtimeSTFT(nn.Module):
                  fade_n_samples: int = 0,
                  eps: float = EPS) -> None:
         super().__init__()
-        assert io_n_samples >= hop_length
-        assert io_n_samples % hop_length == 0
+        assert io_n_samples >= hop_len
+        assert io_n_samples % hop_len == 0
         assert n_fft % 2 == 0
-        assert (n_fft // 2) % hop_length == 0
+        assert (n_fft // 2) % hop_len == 0
         assert power is None or power >= 1.0
         if power > 1.0:
             log.warning('A power greater than 1.0 probably adds unnecessary '
@@ -49,7 +46,7 @@ class RealtimeSTFT(nn.Module):
         self.batch_size = batch_size
         self.io_n_samples = io_n_samples
         self.n_fft = n_fft
-        self.hop_length = hop_length
+        self.hop_len = hop_len
         self.model_io_n_frames = model_io_n_frames
         self.power = power
         self.logarithmize = logarithmize
@@ -57,31 +54,31 @@ class RealtimeSTFT(nn.Module):
         self.fade_n_samples = fade_n_samples
         self.eps = eps
 
-        self.io_n_frames = self.io_n_samples // self.hop_length
-        self.overlap_n_frames = self.n_fft // 2 // self.hop_length
+        self.io_n_frames = self.io_n_samples // self.hop_len
+        self.overlap_n_frames = self.n_fft // 2 // self.hop_len
         self.in_buf_n_frames = (self.overlap_n_frames * 2) - 1 + self.io_n_frames
         self.n_bins = (self.n_fft // 2) + 1
         self.stft_out_shape = (self.batch_size, self.n_bins, self.in_buf_n_frames + 1)
         self.model_io_shape = (self.batch_size, self.n_bins, self.model_io_n_frames)
         self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
-        assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_length
+        assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_len
 
         # TODO(christhetree): implement center=False case
         self.stft = Spectrogram(n_fft=self.n_fft,
-                                hop_length=self.hop_length,
+                                hop_length=self.hop_len,
                                 pad=0,
                                 center=True,
                                 normalized=False,
                                 power=None,
                                 return_complex=True)
         self.istft = InverseSpectrogram(n_fft=self.n_fft,
-                                        hop_length=self.hop_length,
+                                        hop_length=self.hop_len,
                                         pad=0,
                                         center=True,
                                         normalized=False)
 
         self.in_buf = tr.full(
-            (self.batch_size, self.in_buf_n_frames * self.hop_length),
+            (self.batch_size, self.in_buf_n_frames * self.hop_len),
             self.eps,
         )
 
@@ -142,7 +139,7 @@ class RealtimeSTFT(nn.Module):
     def audio_to_spec_offline(self, audio: T) -> T:
         assert audio.shape[0] == self.batch_size
         assert audio.shape[1] >= self.n_fft
-        assert audio.shape[1] % self.hop_length == 0
+        assert audio.shape[1] % self.hop_len == 0
         spec = self.stft(audio)
         if self.power is None:
             spec = spec.real
