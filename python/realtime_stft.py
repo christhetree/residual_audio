@@ -12,7 +12,7 @@ from torchaudio.transforms import Spectrogram, InverseSpectrogram
 from tqdm import tqdm
 
 from python.config import OUT_DIR
-from python.modeling import SpecCNN
+from python.modeling import SpecCNN2D
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
@@ -41,6 +41,9 @@ class RealtimeSTFT(nn.Module):
         assert n_fft % 2 == 0
         assert (n_fft // 2) % hop_length == 0
         assert power is None or power >= 1.0
+        if power > 1.0:
+            log.warning('A power greater than 1.0 probably adds unnecessary '
+                        'computational complexity')
         assert fade_n_samples <= io_n_samples
         self.model = model
         self.batch_size = batch_size
@@ -270,8 +273,9 @@ def process_file(path: str, rts: RealtimeSTFT, sr: int = SR) -> None:
 
 
 if __name__ == '__main__':
-    model = None
-    # model = SpecCNN()
+    # TODO(christhetree): fix io_n_samples = 1024, model_io_n_frames = 4 bug
+    # model = None
+    model = SpecCNN2D()
     batch_size = 1
     hop_length = 512
     io_n_samples = 512
