@@ -39,25 +39,33 @@ class SpecCNN1D(nn.Module):
 
 class SpecCNN2D(nn.Module):
     def __init__(self,
-                 n_filters: int = 64,
-                 kernel: Tuple[int] = (3, 3),
-                 pooling: Tuple[int] = (2, 2),
+                 n_filters: int = 4,
+                 kernel: Tuple[int] = (5, 5),
+                 pooling: Tuple[int] = (4, 2),
                  activation: nn.Module = nn.ELU()) -> None:
         super().__init__()
-        padding = (1, 1)
+        padding = (kernel[0] // 2, kernel[1] // 2)
         self.enc = nn.Sequential(
             nn.Conv2d(1, n_filters, kernel, stride=pooling, padding=padding),
             activation,
-            nn.Conv2d(n_filters, n_filters * 2, kernel, stride=pooling, padding=padding),
+            # nn.Conv2d(n_filters, n_filters, kernel, stride=pooling, padding=padding),
+            # activation,
+            # nn.MaxPool2d(kernel, stride=(2, 2), padding=padding),
+            nn.Conv2d(n_filters, n_filters * 4, kernel, stride=pooling, padding=padding),
             activation,
+            # nn.MaxPool2d(kernel, stride=(2, 2), padding=padding),
+            nn.Conv2d(n_filters * 4, n_filters * 16, kernel, stride=pooling, padding=padding),
+            activation,
+            # nn.MaxPool2d(kernel, stride=(2, 2), padding=padding),
         )
         self.dec = nn.Sequential(
-            nn.ConvTranspose2d(n_filters * 2, n_filters, kernel, stride=pooling, padding=padding, output_padding=(0, 1)),
+            nn.ConvTranspose2d(n_filters * 16, n_filters * 4, kernel, stride=pooling, padding=padding, output_padding=(0, 1)),
+            activation,
+            nn.ConvTranspose2d(n_filters * 4, n_filters, kernel, stride=pooling, padding=padding, output_padding=(0, 1)),
             activation,
             nn.ConvTranspose2d(n_filters, n_filters, kernel, stride=pooling, padding=padding, output_padding=(0, 1)),
             activation,
             nn.ConvTranspose2d(n_filters, 1, kernel, stride=(1, 1), padding=padding),
-            # nn.Tanh(),
         )
 
     def forward(self, spec: T) -> T:

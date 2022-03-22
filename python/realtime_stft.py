@@ -2,16 +2,12 @@ import logging
 import os
 from typing import Optional
 
-import librosa as lr
-import numpy as np
-import soundfile as sf
 import torch as tr
-from torch import Tensor as T
+from torch import Tensor
 from torch import nn
 from torchaudio.transforms import Spectrogram, InverseSpectrogram
-from tqdm import tqdm
 
-from config import OUT_DIR, EPS, SR
+from config import EPS
 from modeling import SpecCNN2D
 
 logging.basicConfig()
@@ -69,8 +65,7 @@ class RealtimeSTFT(nn.Module):
                                 pad=0,
                                 center=True,
                                 normalized=False,
-                                power=None,
-                                return_complex=True)
+                                power=None)
         self.istft = InverseSpectrogram(n_fft=self.n_fft,
                                         hop_length=self.hop_len,
                                         pad=0,
@@ -106,10 +101,11 @@ class RealtimeSTFT(nn.Module):
             self.fade_down = tr.linspace(1, 0, self.fade_n_samples)
         self.zero_phase = tr.zeros(self.model_io_shape)
 
-    @property
-    def min_delay_samples(self) -> int:
+    @tr.jit.export
+    def calc_min_delay_samples(self) -> int:
         return self.fade_n_samples
 
+    @tr.jit.export
     def reset(self) -> None:
         self.in_buf.fill_(self.eps)
         self.stft_mag_buf.fill_(self.eps)
@@ -120,8 +116,8 @@ class RealtimeSTFT(nn.Module):
         self.out_buf.fill_(self.eps)
 
     def _update_mag_or_phase_buffers(self,
-                                     stft_out_buf: T,
-                                     frames_buf: T) -> T:
+                                     stft_out_buf: Tensor,
+                                     frames_buf: Tensor) -> Tensor:
         # Remove overlap frames we have computed before
         frames = stft_out_buf[:, :, self.overlap_n_frames:]
         # Identify frames that are more correct due to missing prev audio info
@@ -136,7 +132,8 @@ class RealtimeSTFT(nn.Module):
         frames_buf[:, :, -self.io_n_frames:] = new_frames
         return frames_buf
 
-    def audio_to_spec_offline(self, audio: T) -> T:
+    @tr.jit.ignore
+    def audio_to_spec_offline(self, audio: Tensor) -> Tensor:
         assert audio.shape[0] == self.batch_size
         assert audio.shape[1] >= self.n_fft
         assert audio.shape[1] % self.hop_len == 0
@@ -154,7 +151,8 @@ class RealtimeSTFT(nn.Module):
 
         return spec
 
-    def audio_to_spec(self, audio: T) -> T:
+    @tr.jit.export
+    def audio_to_spec(self, audio: Tensor) -> Tensor:
         assert audio.shape == (self.batch_size, self.io_n_samples)
         # Shift buffer left and insert audio chunk
         self.in_buf = tr.roll(self.in_buf, -self.io_n_samples, dims=1)
@@ -183,7 +181,8 @@ class RealtimeSTFT(nn.Module):
 
         return self.mag_buf
 
-    def spec_to_audio(self, spec: T) -> T:
+    @tr.jit.export
+    def spec_to_audio(self, spec: Tensor) -> Tensor:
         assert spec.shape == self.model_io_shape
         spec = spec[:, :, -self.in_buf_n_frames:]
         if self.use_phase_info:
@@ -214,59 +213,31 @@ class RealtimeSTFT(nn.Module):
         self.out_buf = rec_audio
         return audio_out
 
-    def _logarithmize_spec(self, spec: T) -> None:
+    def _logarithmize_spec(self, spec: Tensor) -> None:
         tr.clamp(spec, min=self.eps, out=spec)
         tr.log10(spec, out=spec)
 
-    def _unlogarithmize_spec(self, spec: T) -> None:
+    def _unlogarithmize_spec(self, spec: Tensor) -> None:
         tr.pow(10, spec, out=spec)
         tr.clamp(spec, min=self.eps, out=spec)
 
-    def flush(self) -> T:
+    @tr.jit.export
+    def flush(self) -> Tensor:
         # TODO(christhetree): prevent this memory allocation
         audio_out = tr.full((self.batch_size, self.io_n_samples), self.eps)
         if self.fade_n_samples > 0:
             audio_out[:, :self.fade_n_samples] = self.out_buf[:, -self.fade_n_samples:]
-        else:
-            log.warning('Flushing is not necessary when fade_n_samples == 0')
+        # else:
+        #     log.warning('Flushing is not necessary when fade_n_samples == 0')
         return audio_out
 
-    @tr.no_grad()
-    def forward(self, audio: T) -> T:
-        spec = self.audio_to_spec(audio)
-        if self.model is not None:
-            spec = self.model(spec)
-        rec_audio = self.spec_to_audio(spec)
-        return rec_audio
-
-
-def process_file(path: str, rts: RealtimeSTFT, sr: int = SR) -> None:
-    audio_in, _ = lr.load(path, sr=sr, mono=True)
-    n_steps = len(audio_in) // rts.io_n_samples
-    audio_in = audio_in[:n_steps * rts.io_n_samples]
-    audio_pt = tr.tensor(audio_in).unsqueeze(dim=0)
-
-    audio_out = []
-    rts.reset()
-    for idx in tqdm(range(n_steps)):
-        start_idx = idx * rts.io_n_samples
-        chunk_in = audio_pt[:, start_idx:start_idx + io_n_samples]
-        chunk_out = rts(chunk_in)
-        audio_chunk = chunk_out[0].numpy()
-        audio_out.append(audio_chunk)
-
-    audio_out.append(rts.flush()[0].numpy())
-    audio_out = np.concatenate(audio_out)
-
-    wav_name = os.path.basename(path)[:-4]
-    in_save_name = f'{wav_name}__in.wav'
-    sf.write(os.path.join(OUT_DIR, in_save_name),
-             audio_in,
-             samplerate=sr)
-    out_save_name = f'{wav_name}__out.wav'
-    sf.write(os.path.join(OUT_DIR, out_save_name),
-             audio_out,
-             samplerate=sr)
+    def forward(self, audio: Tensor) -> Tensor:
+        with tr.no_grad():
+            spec = self.audio_to_spec(audio)
+            if self.model is not None:
+                spec = self.model(spec)
+            rec_audio = self.spec_to_audio(spec)
+            return rec_audio
 
 
 if __name__ == '__main__':
@@ -277,9 +248,6 @@ if __name__ == '__main__':
     hop_length = 512
     io_n_samples = 512
     n_fft = 2048
-    # hop_length = 4
-    # io_n_samples = 4
-    # n_fft = 16
     model_io_n_frames = 16
     fade_n_samples = 0
     power = 1.0
@@ -299,12 +267,6 @@ if __name__ == '__main__':
         use_phase_info,
         fade_n_samples,
     )
-
-    audio_dir = '/Users/puntland/local_christhetree/qosmo/residual_audio/data/raw_eval'
-    audio_paths = [os.path.join(audio_dir, _) for _ in os.listdir(audio_dir)
-                   if _.endswith('.wav')]
-    for path in audio_paths:
-        process_file(path, rts)
 
     # audio = tr.rand((batch_size, hop_length * audio_n_frames))
     # assert audio_n_frames % rts.io_n_frames == 0
