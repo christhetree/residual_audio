@@ -79,6 +79,8 @@ class RealtimeSTFT(nn.Module):
 
         self.stft_mag_buf = tr.full(self.stft_out_shape, self.eps)
         self.mag_buf = tr.full(self.model_io_shape, self.eps)
+        # Required to allow inplace operations after the encoder
+        self.spec_out_buf = tr.clone(self.mag_buf)
 
         self.stft_phase_buf = tr.zeros(self.stft_out_shape)
         self.phase_buf = tr.zeros(self.model_io_shape)
@@ -94,11 +96,9 @@ class RealtimeSTFT(nn.Module):
         )
         self.reset()
 
-        self.fade_up = None
-        self.fade_down = None
-        if self.fade_n_samples > 0:
-            self.fade_up = tr.linspace(0, 1, self.fade_n_samples)
-            self.fade_down = tr.linspace(1, 0, self.fade_n_samples)
+        # These must be instantiated for TorchScript
+        self.fade_up = tr.linspace(0, 1, max(self.fade_n_samples, 1))
+        self.fade_down = tr.linspace(1, 0, max(self.fade_n_samples, 1))
         self.zero_phase = tr.zeros(self.model_io_shape)
 
     @tr.jit.export
@@ -110,6 +110,7 @@ class RealtimeSTFT(nn.Module):
         self.in_buf.fill_(self.eps)
         self.stft_mag_buf.fill_(self.eps)
         self.mag_buf.fill_(self.eps)
+        self.spec_out_buf.fill_(self.eps)
         self.stft_phase_buf.fill_(0)
         self.phase_buf.fill_(0)
         self.out_frames_buf.fill_(self.eps)
@@ -179,7 +180,9 @@ class RealtimeSTFT(nn.Module):
             self.phase_buf = self._update_mag_or_phase_buffers(
                 self.stft_phase_buf, self.phase_buf)
 
-        return self.mag_buf
+        # Prevent future inplace operations from mutating self.mag_buf
+        self.spec_out_buf[:, :] = self.mag_buf
+        return self.spec_out_buf
 
     @tr.jit.export
     def spec_to_audio(self, spec: Tensor) -> Tensor:

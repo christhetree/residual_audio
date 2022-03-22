@@ -8,7 +8,7 @@ import torch as tr
 from tqdm import tqdm
 
 from config import SR, OUT_DIR
-from modeling import SpecCNN2D
+from modeling import SpecCNN2D, SpecCNN1D
 from pl_wrapper import PLWrapper
 from realtime_stft import RealtimeSTFT
 
@@ -51,15 +51,21 @@ def process_file(path: str,
 
 if __name__ == '__main__':
     # model = None
-    model = SpecCNN2D()
+    # model_path = None
 
-    model_path = os.path.join(OUT_DIR, 'testing__epoch=05__val_loss=0.289.ckpt')
-    pl_wrapper = PLWrapper.load_from_checkpoint(
-        model_path,
-        model=model,
-        rts=RealtimeSTFT(),
-        batch_size=1,
-    )
+    model = SpecCNN2D()
+    model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
+
+    # model = SpecCNN1D()
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN1D__testing__epoch=04__val_loss=0.292.ckpt')
+
+    if model_path:
+        pl_wrapper = PLWrapper.load_from_checkpoint(
+            model_path,
+            model=model,
+            rts=RealtimeSTFT(),
+            batch_size=1,
+        )
 
     batch_size = 1
     hop_length = 512
@@ -84,8 +90,8 @@ if __name__ == '__main__':
         fade_n_samples,
     )
     scripted = tr.jit.script(rts)
-    tr.jit.save(scripted, os.path.join(OUT_DIR, 'testing.pt'))
-    scripted_2 = tr.jit.load(os.path.join(OUT_DIR, 'testing.pt'))
+    tr.jit.save(scripted, os.path.join(OUT_DIR, 'tmp.pt'))
+    scripted_2 = tr.jit.load(os.path.join(OUT_DIR, 'tmp.pt'))
     # frozen = tr.jit.freeze(scripted_2.eval(), preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples'])
     # frozen = tr.jit.optimize_for_inference(frozen)
     # exit()
@@ -93,7 +99,9 @@ if __name__ == '__main__':
     audio_dir = '/Users/puntland/local_christhetree/qosmo/residual_audio/data/raw_eval'
     audio_paths = [os.path.join(audio_dir, _) for _ in os.listdir(audio_dir)
                    if _.endswith('.wav')]
+    # for path in audio_paths:
+    #     process_file(path, rts, save_suffix=f'__{model.__class__.__name__}__python')
+    #     # exit()
     for path in audio_paths:
-        process_file(path, rts, save_suffix='__rts')
-    for path in audio_paths:
-        process_file(path, scripted_2, save_suffix='__script')
+        process_file(path, scripted_2, save_suffix=f'__{model.__class__.__name__}')
+        # exit()

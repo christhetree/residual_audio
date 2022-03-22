@@ -13,21 +13,24 @@ log.setLevel(level=os.environ.get('LOGLEVEL', 'INFO'))
 class SpecCNN1D(nn.Module):
     def __init__(self,
                  n_channels: int = 1025,
-                 kernel: Tuple[int] = (3,),
+                 n_filters: int = 128,
+                 kernel: Tuple[int] = (5,),
                  pooling: Tuple[int] = (2,),
                  activation: nn.Module = nn.ELU()) -> None:
         super().__init__()
-        padding = (1,)
+        padding = (kernel[0] // 2,)
         self.enc = nn.Sequential(
-            nn.Conv1d(n_channels, n_channels // 2, kernel, stride=pooling, padding=padding),
+            nn.Conv1d(n_channels, n_filters, kernel, stride=pooling, padding=padding),
             activation,
-            nn.Conv1d(n_channels // 2, n_channels // 4, kernel, stride=pooling, padding=padding),
+            nn.Conv1d(n_filters, 2 * n_filters, kernel, stride=pooling, padding=padding),
             activation,
         )
         self.dec = nn.Sequential(
-            nn.ConvTranspose1d(n_channels // 4, n_channels // 2, kernel, stride=pooling, padding=padding, output_padding=(1,)),
+            nn.ConvTranspose1d(2 * n_filters, n_filters, kernel, stride=pooling, padding=padding, output_padding=(1,)),
             activation,
-            nn.ConvTranspose1d(n_channels // 2, n_channels, kernel, stride=pooling, padding=padding, output_padding=(1,)),
+            nn.ConvTranspose1d(n_filters, n_filters, kernel, stride=pooling, padding=padding, output_padding=(1,)),
+            activation,
+            nn.ConvTranspose1d(n_filters, n_channels, kernel, stride=(1,), padding=padding),
             # activation,
         )
 
