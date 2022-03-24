@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from config import BATCH_SIZE, NUM_WORKERS, OUT_DIR, AUDIO_CHUNKS_PT_DIR, \
     N_FFT, HOP_LEN, GPU
 from datasets import PathsDataset
-from modeling import SpecCNN2D, SpecCNN1D
+from modeling import SpecCNN1D
 from pl_wrapper import PLWrapper
 from realtime_stft import RealtimeSTFT
 
@@ -85,8 +85,8 @@ def train(experiment_name: str,
 
 if __name__ == '__main__':
     rts = RealtimeSTFT(batch_size=BATCH_SIZE, n_fft=N_FFT, hop_len=HOP_LEN)
-    ae = SpecCNN1D()
-    # ae = SpecCNN2D()
-    experiment_name = f'{ae.__class__.__name__}__testing'
+    n_filters = 4
+    ae = SpecCNN1D(n_filters=n_filters)
+    experiment_name = f'{ae.__class__.__name__}__n_fft_{N_FFT}__n_filters_{n_filters}'
     model = PLWrapper(ae, rts)
     train(experiment_name, model)

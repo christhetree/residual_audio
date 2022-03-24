@@ -7,8 +7,8 @@ import soundfile as sf
 import torch as tr
 from tqdm import tqdm
 
-from config import SR, OUT_DIR
-from modeling import SpecCNN2D, SpecCNN1D
+from config import SR, OUT_DIR, HOP_LEN, N_FFT
+from modeling import SpecCNN2DSmall, SpecCNN1D, SpecCNN2DLarge, SpecCNN2DMinimal
 from pl_wrapper import PLWrapper
 from realtime_stft import RealtimeSTFT
 
@@ -29,9 +29,12 @@ def process_file(path: str,
     audio_out = []
     rts.reset()
     for idx in tqdm(range(n_steps)):
+        # wet_ratio = 1.0
+        wet_ratio = idx / int(0.5 * n_steps)
+        wet_ratio = min(1.0, 0.0 + wet_ratio)
         start_idx = idx * rts.io_n_samples
         chunk_in = audio_pt[:, start_idx:start_idx + io_n_samples]
-        chunk_out = rts(chunk_in)
+        chunk_out = rts(chunk_in, wet_ratio)
         audio_chunk = chunk_out[0].numpy()
         audio_out.append(audio_chunk)
 
@@ -50,29 +53,40 @@ def process_file(path: str,
 
 
 if __name__ == '__main__':
-    # model = None
-    # model_path = None
+    model = None
+    model_path = None
+    n_filters = None
 
-    model = SpecCNN2D()
+    n_filters = 4
     model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
+    model = SpecCNN2DSmall(n_filters=n_filters)
 
-    # model = SpecCNN1D()
-    # model_path = os.path.join(OUT_DIR, 'SpecCNN1D__testing__epoch=04__val_loss=0.292.ckpt')
+    # n_filters = 16
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__n_fft_1024__n_filters_16__epoch=04__val_loss=0.262.ckpt')
+    # model = SpecCNN2DLarge(n_filters=n_filters)
+
+    # n_filters = 64
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN1D__n_fft_2048__n_filters_64__epoch=04__val_loss=0.300.ckpt')
+    # n_filters = 4
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN1D__n_fft_2048__n_filters_4__epoch=04__val_loss=0.498.ckpt')
+    # model = SpecCNN1D(n_filters=n_filters)
 
     if model_path:
         pl_wrapper = PLWrapper.load_from_checkpoint(
             model_path,
             model=model,
-            rts=RealtimeSTFT(),
+            rts=RealtimeSTFT(n_fft=N_FFT, hop_len=HOP_LEN),
             batch_size=1,
         )
 
     batch_size = 1
-    hop_length = 512
-    io_n_samples = 512
-    n_fft = 2048
+    hop_length = HOP_LEN
+    io_n_samples = 1024
+    n_fft = N_FFT
     model_io_n_frames = 16
     fade_n_samples = 32
+    spec_diff_mode = True
+    # spec_diff_mode = False
     power = 1.0
     logarithmize = True
     use_phase_info = True
@@ -84,24 +98,27 @@ if __name__ == '__main__':
         n_fft,
         hop_length,
         model_io_n_frames,
+        spec_diff_mode,
         power,
         logarithmize,
         use_phase_info,
         fade_n_samples,
     )
-    scripted = tr.jit.script(rts)
-    tr.jit.save(scripted, os.path.join(OUT_DIR, 'tmp.pt'))
-    scripted_2 = tr.jit.load(os.path.join(OUT_DIR, 'tmp.pt'))
-    # frozen = tr.jit.freeze(scripted_2.eval(), preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples'])
-    # frozen = tr.jit.optimize_for_inference(frozen)
-    # exit()
 
     audio_dir = '/Users/puntland/local_christhetree/qosmo/residual_audio/data/raw_eval'
     audio_paths = [os.path.join(audio_dir, _) for _ in os.listdir(audio_dir)
                    if _.endswith('.wav')]
     # for path in audio_paths:
     #     process_file(path, rts, save_suffix=f'__{model.__class__.__name__}__python')
-    #     # exit()
+    #     exit()
+
+    scripted = tr.jit.script(rts.eval())
+    tr.jit.save(scripted, os.path.join(OUT_DIR, 'tmp.pt'))
+    scripted_2 = tr.jit.load(os.path.join(OUT_DIR, 'tmp.pt'))
+    frozen = tr.jit.freeze(scripted_2, preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples'])
+    frozen = tr.jit.optimize_for_inference(frozen)
+    # exit()
+
     for path in audio_paths:
-        process_file(path, scripted_2, save_suffix=f'__{model.__class__.__name__}')
+        process_file(path, frozen, save_suffix=f'__{model.__class__.__name__}__n_filters_{n_filters}__sdm_{spec_diff_mode}')
         # exit()

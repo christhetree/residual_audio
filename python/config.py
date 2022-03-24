@@ -10,13 +10,15 @@ log.setLevel(level=os.environ.get('LOGLEVEL', 'INFO'))
 OUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../out'))
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data'))
 RAW_AUDIO_DIR = os.path.join(DATA_DIR, 'raw_audio_in')
-AUDIO_CHUNKS_PT_DIR = os.path.join(DATA_DIR, 'audio_chunks_pt')
 
 SR = 44100
 EPS = 1e-8
 
 N_FFT = 2048
+# N_FFT = 1024
 HOP_LEN = N_FFT // 4
+
+AUDIO_CHUNKS_PT_DIR = os.path.join(DATA_DIR, f'audio_chunks_pt__{N_FFT}')
 
 GPU_IDX = None
 CPU_BATCH_SIZE = 8

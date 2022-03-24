@@ -8,7 +8,7 @@ from torch import nn
 from torchaudio.transforms import Spectrogram, InverseSpectrogram
 
 from config import EPS
-from modeling import SpecCNN2D
+from modeling import SpecCNN2DSmall
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
@@ -23,6 +23,7 @@ class RealtimeSTFT(nn.Module):
                  n_fft: int = 2048,
                  hop_len: int = 512,
                  model_io_n_frames: int = 16,
+                 spec_diff_mode: bool = False,
                  power: Optional[float] = 1.0,
                  logarithmize: bool = True,
                  use_phase_info: bool = True,
@@ -44,6 +45,7 @@ class RealtimeSTFT(nn.Module):
         self.n_fft = n_fft
         self.hop_len = hop_len
         self.model_io_n_frames = model_io_n_frames
+        self.spec_diff_mode = spec_diff_mode
         self.power = power
         self.logarithmize = logarithmize
         self.use_phase_info = use_phase_info
@@ -234,42 +236,55 @@ class RealtimeSTFT(nn.Module):
         #     log.warning('Flushing is not necessary when fade_n_samples == 0')
         return audio_out
 
-    def forward(self, audio: Tensor) -> Tensor:
+    def forward(self, audio: Tensor, spec_wetdry_ratio: float = 1.0) -> Tensor:
         with tr.no_grad():
-            spec = self.audio_to_spec(audio)
-            if self.model is not None:
-                spec = self.model(spec)
-            rec_audio = self.spec_to_audio(spec)
+            dry_spec = self.audio_to_spec(audio)
+            if self.model is None:
+                # TODO(christhetree): eliminate memory allocation here
+                wet_spec = tr.clone(dry_spec)
+            else:
+                wet_spec = self.model(dry_spec)
+
+            if self.spec_diff_mode:
+                tr.sub(dry_spec, wet_spec, out=wet_spec)
+
+            if spec_wetdry_ratio < 1.0:
+                dry_amount = 1.0 - spec_wetdry_ratio
+                wet_spec *= spec_wetdry_ratio
+                dry_spec *= dry_amount
+                wet_spec += dry_spec
+
+            rec_audio = self.spec_to_audio(wet_spec)
             return rec_audio
 
 
 if __name__ == '__main__':
     # TODO(christhetree): fix io_n_samples = 1024, model_io_n_frames = 4 bug
     # model = None
-    model = SpecCNN2D()
-    batch_size = 1
-    hop_length = 512
-    io_n_samples = 512
-    n_fft = 2048
-    model_io_n_frames = 16
-    fade_n_samples = 0
-    power = 1.0
-    logarithmize = True
-    use_phase_info = True
-    audio_n_frames = 16
-
-    rts = RealtimeSTFT(
-        model,
-        batch_size,
-        io_n_samples,
-        n_fft,
-        hop_length,
-        model_io_n_frames,
-        power,
-        logarithmize,
-        use_phase_info,
-        fade_n_samples,
-    )
+    model = SpecCNN2DSmall()
+    # batch_size = 1
+    # hop_length = 512
+    # io_n_samples = 512
+    # n_fft = 2048
+    # model_io_n_frames = 16
+    # fade_n_samples = 0
+    # power = 1.0
+    # logarithmize = True
+    # use_phase_info = True
+    # audio_n_frames = 16
+    #
+    # rts = RealtimeSTFT(
+    #     model,
+    #     batch_size,
+    #     io_n_samples,
+    #     n_fft,
+    #     hop_length,
+    #     model_io_n_frames,
+    #     power,
+    #     logarithmize,
+    #     use_phase_info,
+    #     fade_n_samples,
+    # )
 
     # audio = tr.rand((batch_size, hop_length * audio_n_frames))
     # assert audio_n_frames % rts.io_n_frames == 0
