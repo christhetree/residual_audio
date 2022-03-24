@@ -1,10 +1,10 @@
 import logging
 import os
-from typing import Optional
+from typing import Optional, List, Any, Dict
 
 from pytorch_lightning import LightningModule
 from torch import Tensor as T, nn
-from torch.optim import Adam
+from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import MultiplicativeLR
 
 from realtime_stft import RealtimeSTFT
@@ -47,7 +47,7 @@ class PLWrapper(LightningModule):
                         batch_idx: Optional[int] = None) -> T:
         return self._step(batch, 'val')
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> (List[Optimizer], List[Dict[str, Any]]):
         opt = Adam(self.parameters(), lr=self.init_lr)
         lr_scheduler_1 = MultiplicativeLR(opt, lr_lambda=lambda x: 0.90)
         lr_schedule = {
@@ -55,5 +55,3 @@ class PLWrapper(LightningModule):
             'monitor': 'val_loss',
         }
         return [opt], [lr_schedule]
-
-

@@ -29,9 +29,9 @@ def process_file(path: str,
     audio_out = []
     rts.reset()
     for idx in tqdm(range(n_steps)):
-        # wet_ratio = 1.0
-        wet_ratio = idx / int(0.5 * n_steps)
-        wet_ratio = min(1.0, 0.0 + wet_ratio)
+        wet_ratio = 1.0  # TODO(christhetree): make dynamic
+        # wet_ratio = idx / int(0.5 * n_steps)
+        # wet_ratio = min(1.0, 0.0 + wet_ratio)
         start_idx = idx * rts.io_n_samples
         chunk_in = audio_pt[:, start_idx:start_idx + io_n_samples]
         chunk_out = rts(chunk_in, wet_ratio)
@@ -72,6 +72,8 @@ if __name__ == '__main__':
     # model = SpecCNN1D(n_filters=n_filters)
 
     if model_path:
+        # This loads the weights into the model
+        # We don't need the PLWrapper after this
         pl_wrapper = PLWrapper.load_from_checkpoint(
             model_path,
             model=model,
@@ -91,6 +93,7 @@ if __name__ == '__main__':
     logarithmize = True
     use_phase_info = True
 
+    # Wrap the spectral model with an RTS
     rts = RealtimeSTFT(
         model,
         batch_size,
@@ -115,10 +118,15 @@ if __name__ == '__main__':
     scripted = tr.jit.script(rts.eval())
     tr.jit.save(scripted, os.path.join(OUT_DIR, 'tmp.pt'))
     scripted_2 = tr.jit.load(os.path.join(OUT_DIR, 'tmp.pt'))
-    frozen = tr.jit.freeze(scripted_2, preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples'])
+    frozen = tr.jit.freeze(
+        scripted_2,
+        preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples']
+    )
     frozen = tr.jit.optimize_for_inference(frozen)
     # exit()
 
     for path in audio_paths:
-        process_file(path, frozen, save_suffix=f'__{model.__class__.__name__}__n_filters_{n_filters}__sdm_{spec_diff_mode}')
+        process_file(path, frozen, save_suffix=f'__{model.__class__.__name__}'
+                                               f'__n_filters_{n_filters}'
+                                               f'__sdm_{spec_diff_mode}')
         # exit()
