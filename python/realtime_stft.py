@@ -7,7 +7,7 @@ from torch import Tensor
 from torch import nn
 from torchaudio.transforms import Spectrogram, InverseSpectrogram
 
-from config import EPS
+from config import EPS, MODEL_IO_N_FRAMES
 from modeling import SpecCNN2DSmall
 
 logging.basicConfig()
@@ -22,7 +22,7 @@ class RealtimeSTFT(nn.Module):
                  io_n_samples: int = 512,
                  n_fft: int = 2048,
                  hop_len: int = 512,
-                 model_io_n_frames: int = 16,
+                 model_io_n_frames: int = MODEL_IO_N_FRAMES,
                  spec_diff_mode: bool = False,
                  power: Optional[float] = 1.0,
                  logarithmize: bool = True,

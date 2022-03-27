@@ -5,7 +5,8 @@ from typing import Tuple
 import torch as tr
 from torch import Tensor as T, nn
 
-from config import N_FFT
+from config import N_FFT, N_BINS
+from tcn_2d import TCN2D
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
@@ -158,3 +159,23 @@ class SpecMLP(nn.Module):
         rec = self.dec(z)
         rec = tr.swapaxes(rec, 1, 2)
         return rec
+
+
+class FXModel(nn.Module):
+    def __init__(self,
+                 n_filters: int = 1,
+                 kernel: Tuple[int] = (5, 5)) -> None:
+        super().__init__()
+        self.chain = nn.Sequential(
+            nn.Conv2d(1, n_filters, kernel, padding='same', bias=True),
+            # nn.Linear(N_BINS, N_BINS),
+            # TCN2D(n_blocks=2, n_channels=1, use_act=True, use_bn=False),
+        )
+
+    def forward(self, spec: T) -> T:
+        spec = spec.unsqueeze(1)
+        # spec = tr.swapaxes(spec, 1, 2)
+        wet_spec = self.chain(spec)
+        wet_spec = wet_spec.squeeze(1)
+        # wet_spec = tr.swapaxes(wet_spec, 1, 2)
+        return wet_spec

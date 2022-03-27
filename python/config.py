@@ -17,11 +17,15 @@ EPS = 1e-8
 N_FFT = 2048
 # N_FFT = 1024
 HOP_LEN = N_FFT // 4
+N_BINS = (N_FFT // 2) + 1
+MODEL_IO_N_FRAMES = 32
 
-AUDIO_CHUNKS_PT_DIR = os.path.join(DATA_DIR, f'audio_chunks_pt__{N_FFT}')
+AUDIO_CHUNKS_PT_DIR = os.path.join(DATA_DIR, f'audio_chunks_pt'
+                                             f'__n_fft_{N_FFT}'
+                                             f'__n_frames_{MODEL_IO_N_FRAMES}')
 
 GPU_IDX = None
-CPU_BATCH_SIZE = 8
+CPU_BATCH_SIZE = 128
 GPU_BATCH_SIZE = 512
 BATCH_SIZE = CPU_BATCH_SIZE
 NUM_WORKERS = 0

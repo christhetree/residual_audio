@@ -10,9 +10,9 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import DataLoader
 
 from config import BATCH_SIZE, NUM_WORKERS, OUT_DIR, AUDIO_CHUNKS_PT_DIR, \
-    N_FFT, HOP_LEN, GPU
+    N_FFT, HOP_LEN, GPU, MODEL_IO_N_FRAMES
 from datasets import PathsDataset
-from modeling import SpecCNN1D
+from modeling import FXModel
 from pl_wrapper import PLWrapper
 from realtime_stft import RealtimeSTFT
 
@@ -28,6 +28,7 @@ log.info(f'tr.backends.cudnn.benchmark = {tr.backends.cudnn.benchmark}')
 def train(experiment_name: str,
           model: LightningModule,
           data_dir: str = AUDIO_CHUNKS_PT_DIR,
+          fx_data_dir: Optional[str] = None,
           max_N: Optional[int] = None,
           val_split: float = 0.2) -> None:
     paths = list(os.listdir(data_dir))
@@ -46,8 +47,8 @@ def train(experiment_name: str,
     log.info(f'train_n n = {train_n}')
     log.info(f'val_n n = {val_n}')
 
-    train_ds = PathsDataset(train_paths)
-    val_ds = PathsDataset(val_paths)
+    train_ds = PathsDataset(train_paths, fx_dir=fx_data_dir)
+    val_ds = PathsDataset(val_paths, fx_dir=fx_data_dir)
     train_dl = DataLoader(train_ds,
                           batch_size=BATCH_SIZE,
                           shuffle=True,
@@ -74,7 +75,7 @@ def train(experiment_name: str,
                        patience=8,
                        verbose=True)
     trainer = pl.Trainer(gpus=GPU,
-                         max_epochs=5,
+                         max_epochs=10,
                          log_every_n_steps=50,
                          callbacks=[cp, es])
     log.info('')
@@ -84,9 +85,18 @@ def train(experiment_name: str,
 
 
 if __name__ == '__main__':
-    rts = RealtimeSTFT(batch_size=BATCH_SIZE, n_fft=N_FFT, hop_len=HOP_LEN)
-    n_filters = 4
-    ae = SpecCNN1D(n_filters=n_filters)
-    experiment_name = f'{ae.__class__.__name__}__n_fft_{N_FFT}__n_filters_{n_filters}'
-    model = PLWrapper(ae, rts)
-    train(experiment_name, model)
+    rts = RealtimeSTFT(batch_size=BATCH_SIZE,
+                       n_fft=N_FFT,
+                       hop_len=HOP_LEN,
+                       model_io_n_frames=MODEL_IO_N_FRAMES)
+
+    fx_save_dir = f'{AUDIO_CHUNKS_PT_DIR}__dist'
+    n_filters = 1
+    fx_model = FXModel(n_filters=n_filters)
+
+    experiment_name = f'{fx_model.__class__.__name__}' \
+                      f'__n_fft_{N_FFT}' \
+                      f'__n_frames_{MODEL_IO_N_FRAMES}' \
+                      f'__n_filters_{n_filters}'
+    model = PLWrapper(fx_model, rts)
+    train(experiment_name, model, fx_data_dir=fx_save_dir)

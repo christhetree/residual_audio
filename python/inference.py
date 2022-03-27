@@ -7,8 +7,9 @@ import soundfile as sf
 import torch as tr
 from tqdm import tqdm
 
-from config import SR, OUT_DIR, HOP_LEN, N_FFT
-from modeling import SpecCNN2DSmall, SpecCNN1D, SpecCNN2DLarge, SpecCNN2DMinimal
+from config import SR, OUT_DIR, HOP_LEN, N_FFT, MODEL_IO_N_FRAMES
+from modeling import SpecCNN2DSmall, SpecCNN1D, SpecCNN2DLarge, \
+    SpecCNN2DMinimal, FXModel
 from pl_wrapper import PLWrapper
 from realtime_stft import RealtimeSTFT
 
@@ -57,9 +58,9 @@ if __name__ == '__main__':
     model_path = None
     n_filters = None
 
-    n_filters = 4
-    model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
-    model = SpecCNN2DSmall(n_filters=n_filters)
+    # n_filters = 4
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
+    # model = SpecCNN2DSmall(n_filters=n_filters)
 
     # n_filters = 16
     # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__n_fft_1024__n_filters_16__epoch=04__val_loss=0.262.ckpt')
@@ -70,6 +71,10 @@ if __name__ == '__main__':
     # n_filters = 4
     # model_path = os.path.join(OUT_DIR, 'SpecCNN1D__n_fft_2048__n_filters_4__epoch=04__val_loss=0.498.ckpt')
     # model = SpecCNN1D(n_filters=n_filters)
+
+    n_filters = 1
+    # model_path = os.path.join(OUT_DIR, '')
+    model = FXModel(n_filters=n_filters)
 
     if model_path:
         # This loads the weights into the model
@@ -85,7 +90,7 @@ if __name__ == '__main__':
     hop_length = HOP_LEN
     io_n_samples = 1024
     n_fft = N_FFT
-    model_io_n_frames = 16
+    model_io_n_frames = MODEL_IO_N_FRAMES
     fade_n_samples = 32
     spec_diff_mode = True
     # spec_diff_mode = False
@@ -122,7 +127,7 @@ if __name__ == '__main__':
         scripted_2,
         preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples']
     )
-    frozen = tr.jit.optimize_for_inference(frozen)
+    # frozen = tr.jit.optimize_for_inference(frozen)
     # exit()
 
     for path in audio_paths:
