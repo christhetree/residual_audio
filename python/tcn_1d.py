@@ -80,7 +80,8 @@ class TCN1DBlock(nn.Module):
             x = self.film(x, c)
         if hasattr(self, "act"):
             x = self.act(x)
-        x_res = causal_crop(self.res(x_in), x.shape[-1])
+        res = self.res(x_in)
+        x_res = causal_crop(res, x.shape[-1])
         x = x + x_res
 
         return x
@@ -139,7 +140,8 @@ class TCN1D(nn.Module):
 
 
 if __name__ == '__main__':
-    tcn = TCN1D(n_blocks=4)
-    audio = tr.rand((1, 65536))
-    out = tcn.forward(audio)
+    tcn = TCN1D(n_blocks=4, cond_dim=3)
+    audio = tr.rand((1, 1, 65536))
+    cond = tr.rand((1, 1, 3))
+    out = tcn.forward(audio, cond)
     log.info(out.shape)
