@@ -92,8 +92,8 @@ if __name__ == '__main__':
     n_fft = N_FFT
     model_io_n_frames = MODEL_IO_N_FRAMES
     fade_n_samples = 32
-    spec_diff_mode = True
-    # spec_diff_mode = False
+    # spec_diff_mode = True
+    spec_diff_mode = False
     power = 1.0
     logarithmize = True
     use_phase_info = True

@@ -2,13 +2,13 @@ import logging
 import os
 from typing import Optional
 
+import numpy as np
 import torch as tr
 from torch import Tensor
 from torch import nn
 from torchaudio.transforms import Spectrogram, InverseSpectrogram
 
 from config import EPS, MODEL_IO_N_FRAMES
-from modeling import SpecCNN2DSmall
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
@@ -26,6 +26,7 @@ class RealtimeSTFT(nn.Module):
                  spec_diff_mode: bool = False,
                  power: Optional[float] = 1.0,
                  logarithmize: bool = True,
+                 normalize: bool = False,
                  use_phase_info: bool = True,
                  fade_n_samples: int = 0,
                  eps: float = EPS) -> None:
@@ -35,7 +36,7 @@ class RealtimeSTFT(nn.Module):
         assert n_fft % 2 == 0
         assert (n_fft // 2) % hop_len == 0
         assert power is None or power >= 1.0
-        if power > 1.0:
+        if power is not None and power > 1.0:
             log.warning('A power greater than 1.0 probably adds unnecessary '
                         'computational complexity')
         assert fade_n_samples <= io_n_samples
@@ -53,6 +54,7 @@ class RealtimeSTFT(nn.Module):
         self.eps = eps
 
         self.io_n_frames = self.io_n_samples // self.hop_len
+        assert self.io_n_frames <= self.model_io_n_frames
         self.overlap_n_frames = self.n_fft // 2 // self.hop_len
         self.in_buf_n_frames = (self.overlap_n_frames * 2) - 1 + self.io_n_frames
         self.n_bins = (self.n_fft // 2) + 1
@@ -129,7 +131,8 @@ class RealtimeSTFT(nn.Module):
         # Identify the new frames for the input audio chunk
         new_frames = frames[:, :, -self.io_n_frames:]
         # Overwrite previous frames with more correct frames
-        frames_buf[:, :, -self.overlap_n_frames:] = fixed_prev_frames
+        n_fixed_frames = min(self.model_io_n_frames, self.overlap_n_frames)
+        frames_buf[:, :, -n_fixed_frames:] = fixed_prev_frames[:, :, -n_fixed_frames:]
         # Shift buffer left and insert new frames
         frames_buf = tr.roll(frames_buf, -self.io_n_frames, dims=2)
         frames_buf[:, :, -self.io_n_frames:] = new_frames
@@ -246,6 +249,7 @@ class RealtimeSTFT(nn.Module):
                 wet_spec = self.model(dry_spec)
 
             if self.spec_diff_mode:
+                # tr.sub(dry_spec, wet_spec.abs(), out=wet_spec)
                 tr.sub(dry_spec, wet_spec, out=wet_spec)
 
             if spec_wetdry_ratio < 1.0:
@@ -259,57 +263,62 @@ class RealtimeSTFT(nn.Module):
 
 
 if __name__ == '__main__':
-    # TODO(christhetree): fix io_n_samples = 1024, model_io_n_frames = 4 bug
-    # model = None
-    model = SpecCNN2DSmall()
-    # batch_size = 1
-    # hop_length = 512
-    # io_n_samples = 512
-    # n_fft = 2048
-    # model_io_n_frames = 16
-    # fade_n_samples = 0
-    # power = 1.0
-    # logarithmize = True
-    # use_phase_info = True
-    # audio_n_frames = 16
-    #
-    # rts = RealtimeSTFT(
-    #     model,
-    #     batch_size,
-    #     io_n_samples,
-    #     n_fft,
-    #     hop_length,
-    #     model_io_n_frames,
-    #     power,
-    #     logarithmize,
-    #     use_phase_info,
-    #     fade_n_samples,
-    # )
+    batch_size = 1
+    io_n_samples = 2048
+    n_fft = 2048
+    hop_len = 512
+    # io_n_samples = 2
+    # n_fft = 8
+    # hop_len = 2
+    model_io_n_frames = 16
+    power = 1.0
+    logarithmize = False
+    center = True
+    use_phase_info = True
+    fade_n_samples = 0
+    audio_n_frames = 16
 
-    # audio = tr.rand((batch_size, hop_length * audio_n_frames))
-    # assert audio_n_frames % rts.io_n_frames == 0
-    #
-    # all_spec = rts.stft(audio)
-    # all_spec = all_spec.abs().pow(power)
-    #
-    # chunked_spec = None
-    # n_steps = (hop_length * audio_n_frames) // io_n_samples
-    # for idx in range(n_steps):
-    #     start_idx = idx * io_n_samples
-    #     chunk_in = audio[:, start_idx:start_idx + io_n_samples]
-    #     chunked_spec = rts.audio_to_spec(chunk_in)
-    #     # print(np.allclose(chunk_in.numpy(), chunk_out.numpy()))
-    #
-    # all_np = all_spec.numpy()[0]
-    # chunked_np = chunked_spec.numpy()[0]
-    #
-    # cut_idx = rts.overlap_n_frames - 1
-    # cut_chunked_np = chunked_np[:, cut_idx:]
-    # all_np = all_np[:, -model_io_n_frames:]
-    # cut_all_np = all_np[:, cut_idx:]
-    # print(np.allclose(all_np, chunked_np))
-    # print(np.allclose(cut_all_np, cut_chunked_np))
-    #
+    rts = RealtimeSTFT(
+        batch_size=batch_size,
+        io_n_samples=io_n_samples,
+        n_fft=n_fft,
+        hop_len=hop_len,
+        model_io_n_frames=model_io_n_frames,
+        power=power,
+        logarithmize=logarithmize,
+        use_phase_info=use_phase_info,
+        fade_n_samples=fade_n_samples,
+    )
+    stft = Spectrogram(n_fft=n_fft,
+                       hop_length=hop_len,
+                       pad=0,
+                       center=center,
+                       normalized=False,
+                       power=power)
+
+    audio = tr.rand((batch_size, hop_len * audio_n_frames))
+    assert audio_n_frames % rts.io_n_frames == 0
+
+    all_spec = rts.audio_to_spec_offline(audio)
+    # all_spec = stft(audio)
+
+    chunked_spec = None
+    n_steps = (hop_len * audio_n_frames) // io_n_samples
+    for idx in range(n_steps):
+        start_idx = idx * io_n_samples
+        chunk_in = audio[:, start_idx:start_idx + io_n_samples]
+        chunked_spec = rts.audio_to_spec(chunk_in)
+
+    all_np = all_spec.numpy()[0]
+    chunked_np = chunked_spec.numpy()[0]
+
+    cut_idx = rts.overlap_n_frames - 1
+    cut_chunked_np = chunked_np[:, cut_idx:]
+    all_np = all_np[:, -model_io_n_frames:]
+    cut_all_np = all_np[:, cut_idx:]
+    print(np.allclose(all_np, chunked_np))
+    print(np.allclose(cut_all_np, cut_chunked_np))
+
     # import matplotlib.pyplot as plt
     # # plt.imshow(all_np)
     # plt.imshow(cut_all_np)
