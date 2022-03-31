@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Optional
+from typing import Optional, List
 
 import numpy as np
 import torch as tr
@@ -26,20 +26,16 @@ class RealtimeSTFT(nn.Module):
                  spec_diff_mode: bool = False,
                  power: Optional[float] = 1.0,
                  logarithmize: bool = True,
-                 normalize: bool = False,
                  use_phase_info: bool = True,
                  fade_n_samples: int = 0,
                  eps: float = EPS) -> None:
         super().__init__()
-        assert io_n_samples >= hop_len
-        assert io_n_samples % hop_len == 0
         assert n_fft % 2 == 0
         assert (n_fft // 2) % hop_len == 0
         assert power is None or power >= 1.0
         if power is not None and power > 1.0:
             log.warning('A power greater than 1.0 probably adds unnecessary '
                         'computational complexity')
-        assert fade_n_samples <= io_n_samples
         self.model = model
         self.batch_size = batch_size
         self.io_n_samples = io_n_samples
@@ -53,15 +49,8 @@ class RealtimeSTFT(nn.Module):
         self.fade_n_samples = fade_n_samples
         self.eps = eps
 
-        self.io_n_frames = self.io_n_samples // self.hop_len
-        assert self.io_n_frames <= self.model_io_n_frames
-        self.overlap_n_frames = self.n_fft // 2 // self.hop_len
-        self.in_buf_n_frames = (self.overlap_n_frames * 2) - 1 + self.io_n_frames
-        self.n_bins = (self.n_fft // 2) + 1
-        self.stft_out_shape = (self.batch_size, self.n_bins, self.in_buf_n_frames + 1)
-        self.model_io_shape = (self.batch_size, self.n_bins, self.model_io_n_frames)
-        self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
-        assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_len
+        # Sets internal parameters and allocates buffers
+        self.set_buffer_size(io_n_samples)
 
         # TODO(christhetree): implement center=False case
         self.stft = Spectrogram(n_fft=self.n_fft,
@@ -75,7 +64,23 @@ class RealtimeSTFT(nn.Module):
                                         pad=0,
                                         center=True,
                                         normalized=False)
+        # These must be instantiated for TorchScript
+        self.fade_up = tr.linspace(0, 1, max(self.fade_n_samples, 1))
+        self.fade_down = tr.linspace(1, 0, max(self.fade_n_samples, 1))
+        self.zero_phase = tr.zeros(self.model_io_shape)
 
+    def _set_internal_params(self) -> None:
+        self.io_n_frames = self.io_n_samples // self.hop_len
+        assert self.io_n_frames <= self.model_io_n_frames
+        self.overlap_n_frames = self.n_fft // 2 // self.hop_len
+        self.in_buf_n_frames = (self.overlap_n_frames * 2) - 1 + self.io_n_frames
+        self.n_bins = (self.n_fft // 2) + 1
+        self.stft_out_shape = (self.batch_size, self.n_bins, self.in_buf_n_frames + 1)
+        self.model_io_shape = (self.batch_size, self.n_bins, self.model_io_n_frames)
+        self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
+        assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_len
+
+    def _allocate_buffers(self) -> None:
         self.in_buf = tr.full(
             (self.batch_size, self.in_buf_n_frames * self.hop_len),
             self.eps,
@@ -98,16 +103,37 @@ class RealtimeSTFT(nn.Module):
             (self.batch_size, self.out_buf_n_samples),
             self.eps,
         )
-        self.reset()
 
-        # These must be instantiated for TorchScript
-        self.fade_up = tr.linspace(0, 1, max(self.fade_n_samples, 1))
-        self.fade_down = tr.linspace(1, 0, max(self.fade_n_samples, 1))
-        self.zero_phase = tr.zeros(self.model_io_shape)
+    @tr.jit.export
+    def set_buffer_size(self, io_n_samples: int) -> None:
+        assert io_n_samples >= self.hop_len
+        assert io_n_samples % self.hop_len == 0
+        assert self.fade_n_samples <= io_n_samples
+        self.io_n_samples = io_n_samples
+        self._set_internal_params()
+        self._allocate_buffers()
+        self.reset()
 
     @tr.jit.export
     def calc_min_delay_samples(self) -> int:
         return self.fade_n_samples
+
+    @tr.jit.export
+    def calc_min_buffer_size(self) -> int:
+        return self.hop_len
+
+    @tr.jit.export
+    def calc_max_buffer_size(self) -> int:
+        return self.model_io_n_frames * self.hop_len
+
+    @tr.jit.export
+    def calc_supported_buffer_sizes(self) -> List[int]:
+        min_buffer_size = self.calc_min_buffer_size()
+        max_buffer_size = self.calc_max_buffer_size()
+        buffer_sizes = [bs for bs in range(min_buffer_size,
+                                           max_buffer_size + 1,
+                                           self.hop_len)]
+        return buffer_sizes
 
     @tr.jit.export
     def reset(self) -> None:
