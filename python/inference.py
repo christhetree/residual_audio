@@ -58,9 +58,9 @@ if __name__ == '__main__':
     model_path = None
     n_filters = None
 
-    # n_filters = 4
-    # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
-    # model = SpecCNN2DSmall(n_filters=n_filters)
+    n_filters = 4
+    model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
+    model = SpecCNN2DSmall(n_filters=n_filters)
 
     # n_filters = 16
     # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__n_fft_1024__n_filters_16__epoch=04__val_loss=0.262.ckpt')
@@ -72,9 +72,9 @@ if __name__ == '__main__':
     # model_path = os.path.join(OUT_DIR, 'SpecCNN1D__n_fft_2048__n_filters_4__epoch=04__val_loss=0.498.ckpt')
     # model = SpecCNN1D(n_filters=n_filters)
 
-    n_filters = 1
+    # n_filters = 1
     # model_path = os.path.join(OUT_DIR, '')
-    model = FXModel(n_filters=n_filters)
+    # model = FXModel(n_filters=n_filters)
 
     if model_path:
         # This loads the weights into the model
@@ -88,12 +88,12 @@ if __name__ == '__main__':
 
     batch_size = 1
     hop_length = HOP_LEN
-    io_n_samples = 1024
+    io_n_samples = 512
     n_fft = N_FFT
     model_io_n_frames = MODEL_IO_N_FRAMES
     fade_n_samples = 32
-    # spec_diff_mode = True
-    spec_diff_mode = False
+    spec_diff_mode = True
+    # spec_diff_mode = False
     power = 1.0
     logarithmize = True
     use_phase_info = True
@@ -120,18 +120,21 @@ if __name__ == '__main__':
     #     process_file(path, rts, save_suffix=f'__{model.__class__.__name__}__python')
     #     exit()
 
-    scripted = tr.jit.script(rts.eval())
-    tr.jit.save(scripted, os.path.join(OUT_DIR, 'tmp.pt'))
-    scripted_2 = tr.jit.load(os.path.join(OUT_DIR, 'tmp.pt'))
-    frozen = tr.jit.freeze(
-        scripted_2,
-        preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples']
-    )
-    # frozen = tr.jit.optimize_for_inference(frozen)
+    tmp_script = tr.jit.script(rts.eval())
+    tr.jit.save(tmp_script, os.path.join(OUT_DIR, 'tmp.pt'))
+    script = tr.jit.load(os.path.join(OUT_DIR, 'tmp.pt'))
+    # script = tr.jit.freeze(
+    #     script,
+    #     preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples']
+    # )
+    # script = tr.jit.optimize_for_inference(frozen)
     # exit()
 
-    for path in audio_paths:
-        process_file(path, frozen, save_suffix=f'__{model.__class__.__name__}'
+    for idx, path in enumerate(audio_paths):
+        process_file(path, script, save_suffix=f'__{model.__class__.__name__}'
                                                f'__n_filters_{n_filters}'
                                                f'__sdm_{spec_diff_mode}')
+        io_n_samples = (idx + 1) * 512
+        log.info(f'io_n_samples = {io_n_samples}')
+        script.set_buffer_size(io_n_samples)
         # exit()
