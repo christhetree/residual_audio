@@ -295,7 +295,9 @@ class RealtimeSTFT(nn.Module):
         #     log.warning('Flushing is not necessary when fade_n_samples == 0')
         return audio_out
 
-    def forward(self, audio: Tensor, spec_wetdry_ratio: float = 1.0) -> Tensor:
+    def forward(self,
+                audio: Tensor,
+                spec_wetdry_ratio: float = 1.0) -> Tensor:
         with tr.no_grad():
             dry_spec = self.audio_to_spec(audio)
             if self.model is None:

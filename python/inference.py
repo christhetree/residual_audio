@@ -35,7 +35,7 @@ def process_file(path: str,
         # wet_ratio = min(1.0, 0.0 + wet_ratio)
         start_idx = idx * rts.io_n_samples
         chunk_in = audio_pt[:, start_idx:start_idx + io_n_samples]
-        chunk_out = rts(chunk_in, wet_ratio)
+        chunk_out = rts(chunk_in, spec_wetdry_ratio=wet_ratio)
         audio_chunk = chunk_out[0].numpy()
         audio_out.append(audio_chunk)
 
