@@ -87,7 +87,7 @@ if __name__ == '__main__':
         )
 
     batch_size = 1
-    hop_length = HOP_LEN
+    hop_len = HOP_LEN
     io_n_samples = 512
     n_fft = N_FFT
     model_io_n_frames = MODEL_IO_N_FRAMES
@@ -96,21 +96,24 @@ if __name__ == '__main__':
     # spec_diff_mode = False
     power = 1.0
     logarithmize = True
+    # ensure_pos_spec = True
+    ensure_pos_spec = False
     use_phase_info = True
 
     # Wrap the spectral model with an RTS
     rts = RealtimeSTFT(
-        model,
-        batch_size,
-        io_n_samples,
-        n_fft,
-        hop_length,
-        model_io_n_frames,
-        spec_diff_mode,
-        power,
-        logarithmize,
-        use_phase_info,
-        fade_n_samples,
+        model=model,
+        batch_size=batch_size,
+        io_n_samples=io_n_samples,
+        n_fft=n_fft,
+        hop_len=hop_len,
+        model_io_n_frames=model_io_n_frames,
+        spec_diff_mode=spec_diff_mode,
+        power=power,
+        logarithmize=logarithmize,
+        ensure_pos_spec=ensure_pos_spec,
+        use_phase_info=use_phase_info,
+        fade_n_samples=fade_n_samples,
     )
 
     audio_dir = '/Users/puntland/local_christhetree/qosmo/residual_audio/data/raw_eval'
@@ -127,7 +130,7 @@ if __name__ == '__main__':
     #     script,
     #     preserved_attrs=['io_n_samples', 'reset', 'flush', 'fade_n_samples']
     # )
-    # script = tr.jit.optimize_for_inference(frozen)
+    # script = tr.jit.optimize_for_inference(script)
     # exit()
 
     for idx, path in enumerate(audio_paths):

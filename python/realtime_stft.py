@@ -2,7 +2,6 @@ import logging
 import os
 from typing import Optional, List
 
-import numpy as np
 import torch as tr
 from torch import Tensor
 from torch import nn
@@ -26,6 +25,7 @@ class RealtimeSTFT(nn.Module):
                  spec_diff_mode: bool = False,
                  power: Optional[float] = 1.0,
                  logarithmize: bool = True,
+                 ensure_pos_spec: bool = True,
                  use_phase_info: bool = True,
                  fade_n_samples: int = 0,
                  eps: float = EPS) -> None:
@@ -36,6 +36,7 @@ class RealtimeSTFT(nn.Module):
         if power is not None and power > 1.0:
             log.warning('A power greater than 1.0 probably adds unnecessary '
                         'computational complexity')
+        assert eps < 1.0
         self.model = model
         self.batch_size = batch_size
         self.io_n_samples = io_n_samples
@@ -45,9 +46,31 @@ class RealtimeSTFT(nn.Module):
         self.spec_diff_mode = spec_diff_mode
         self.power = power
         self.logarithmize = logarithmize
+        self.ensure_pos_spec = ensure_pos_spec
         self.use_phase_info = use_phase_info
         self.fade_n_samples = fade_n_samples
         self.eps = eps
+
+        # Internal parameters
+        self.io_n_frames = None
+        self.io_n_frames = None
+        self.overlap_n_frames = None
+        self.in_buf_n_frames = None
+        self.n_bins = None
+        self.stft_out_shape = None
+        self.model_io_shape = None
+        self.out_buf_n_samples = None
+        self.log10_eps = None
+
+        # Internal buffers
+        self.in_buf = None
+        self.stft_mag_buf = None
+        self.mag_buf = None
+        self.spec_out_buf = None
+        self.stft_phase_buf = None
+        self.phase_buf = None
+        self.out_frames_buf = None
+        self.out_buf = None
 
         # Sets internal parameters and allocates buffers
         self.set_buffer_size(io_n_samples)
@@ -79,6 +102,7 @@ class RealtimeSTFT(nn.Module):
         self.model_io_shape = (self.batch_size, self.n_bins, self.model_io_n_frames)
         self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
         assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_len
+        self.log10_eps = tr.log10(tr.tensor([self.eps]))
 
     def _allocate_buffers(self) -> None:
         self.in_buf = tr.full(
@@ -180,6 +204,8 @@ class RealtimeSTFT(nn.Module):
         if self.logarithmize:
             spec = tr.clamp(spec, min=self.eps)
             spec = tr.log10(spec)
+            if self.ensure_pos_spec:
+                spec -= self.log10_eps
 
         return spec
 
@@ -199,6 +225,8 @@ class RealtimeSTFT(nn.Module):
                 tr.pow(self.stft_mag_buf, self.power, out=self.stft_mag_buf)
         if self.logarithmize:
             self._logarithmize_spec(self.stft_mag_buf)
+            if self.ensure_pos_spec:
+                self.stft_mag_buf -= self.log10_eps
 
         self.mag_buf = self._update_mag_or_phase_buffers(self.stft_mag_buf,
                                                          self.mag_buf)
@@ -225,6 +253,8 @@ class RealtimeSTFT(nn.Module):
             phase = self.zero_phase[:, :, -self.in_buf_n_frames:]
 
         if self.logarithmize:
+            if self.ensure_pos_spec:
+                spec += self.log10_eps
             self._unlogarithmize_spec(spec)
 
         if self.power is None:
@@ -275,7 +305,6 @@ class RealtimeSTFT(nn.Module):
                 wet_spec = self.model(dry_spec)
 
             if self.spec_diff_mode:
-                # tr.sub(dry_spec, wet_spec.abs(), out=wet_spec)
                 tr.sub(dry_spec, wet_spec, out=wet_spec)
 
             if spec_wetdry_ratio < 1.0:
@@ -342,6 +371,7 @@ if __name__ == '__main__':
     cut_chunked_np = chunked_np[:, cut_idx:]
     all_np = all_np[:, -model_io_n_frames:]
     cut_all_np = all_np[:, cut_idx:]
+    import numpy as np
     print(np.allclose(all_np, chunked_np))
     print(np.allclose(cut_all_np, cut_chunked_np))
 
