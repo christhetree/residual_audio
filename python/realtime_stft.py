@@ -47,14 +47,6 @@ class RealtimeSTFT(nn.Module):
         self.io_n_samples = io_n_samples
         self.n_fft = n_fft
         self.hop_len = hop_len
-        if window is None:
-            window = tr.hann_window(self.n_fft)
-            if not center:
-                # Ensures the NOLA constraint is met for the hann_window
-                # See https://github.com/pytorch/pytorch/issues/62323
-                # 1e-5 is chosen based on the torchaudio implementation
-                window = tr.clamp(window, min=1e-5)
-        self.window = window
         self.model_io_n_frames = model_io_n_frames
         self.spec_diff_mode = spec_diff_mode
         self.center = center
@@ -65,7 +57,7 @@ class RealtimeSTFT(nn.Module):
         self.fade_n_samples = fade_n_samples
         self.eps = eps
 
-        # Internal parameters
+        # Derived parameters
         self.io_n_frames = None
         self.overlap_n_frames = None
         self.in_buf_n_frames = None
@@ -75,7 +67,6 @@ class RealtimeSTFT(nn.Module):
         self.istft_length = None
         self.model_io_shape = None
         self.out_buf_n_samples = None
-        self.log10_eps = None
 
         # Internal buffers
         self.in_buf = None
@@ -87,15 +78,28 @@ class RealtimeSTFT(nn.Module):
         self.out_frames_buf = None
         self.out_buf = None
 
-        # Sets internal parameters and allocates buffers
+        # Sets derived parameters and allocates buffers
         self.set_buffer_size(io_n_samples)
 
-        # These must be instantiated for TorchScript
-        self.fade_up = tr.linspace(0, 1, max(self.fade_n_samples, 1))
-        self.fade_down = tr.linspace(1, 0, max(self.fade_n_samples, 1))
-        self.zero_phase = tr.zeros(self.model_io_shape)
+        # Internal tensors
+        if window is None:
+            window = tr.hann_window(self.n_fft)
+            if not center:
+                # Ensures the NOLA constraint is met for the hann_window
+                # See https://github.com/pytorch/pytorch/issues/62323
+                # 1e-5 is chosen based on the torchaudio implementation
+                window = tr.clamp(window, min=1e-5)
+        self.register_buffer('window', window, persistent=True)
+        log10_eps = tr.log10(tr.tensor([self.eps]))
+        self.register_buffer('log10_eps', log10_eps, persistent=False)
+        fade_up = tr.linspace(0, 1, max(self.fade_n_samples, 1))
+        self.register_buffer('fade_up', fade_up, persistent=False)
+        fade_down = tr.linspace(1, 0, max(self.fade_n_samples, 1))
+        self.register_buffer('fade_down', fade_down, persistent=False)
+        zero_phase = tr.zeros(self.model_io_shape)
+        self.register_buffer('zero_phase', zero_phase, persistent=False)
 
-    def _set_internal_params(self) -> None:
+    def _set_derived_params(self) -> None:
         self.io_n_frames = self.io_n_samples // self.hop_len
         assert self.io_n_frames <= self.model_io_n_frames
         self.overlap_n_frames = self.n_fft // 2 // self.hop_len
@@ -122,7 +126,6 @@ class RealtimeSTFT(nn.Module):
                                self.model_io_n_frames)
         self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
         assert self.out_buf_n_samples <= self.istft_length
-        self.log10_eps = tr.log10(tr.tensor([self.eps]))
 
     def _allocate_buffers(self) -> None:
         self.in_buf = tr.full(
@@ -154,7 +157,7 @@ class RealtimeSTFT(nn.Module):
         assert io_n_samples % self.hop_len == 0
         assert self.fade_n_samples <= io_n_samples
         self.io_n_samples = io_n_samples
-        self._set_internal_params()
+        self._set_derived_params()
         self._allocate_buffers()
         self.reset()
 

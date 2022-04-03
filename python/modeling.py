@@ -5,8 +5,7 @@ from typing import Tuple
 import torch as tr
 from torch import Tensor as T, nn
 
-from config import N_FFT, N_BINS
-from tcn_2d import TCN2D
+from config import N_FFT
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
