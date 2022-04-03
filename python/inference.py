@@ -61,9 +61,15 @@ if __name__ == '__main__':
     model_path = None
     n_filters = None
 
-    # n_filters = 4
+    n_filters = 4
+    # TODO(christhetree): check why center=False causes artifacts
     # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
-    # model = SpecCNN2DSmall(n_filters=n_filters)
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN2DSmall__center_True__pos_spec_False__n_fft_2048__n_frames_32__n_filters_4__epoch=04__val_loss=0.365.ckpt')
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN2DSmall__center_False__pos_spec_False__n_fft_2048__n_frames_32__n_filters_4__epoch=04__val_loss=0.351.ckpt')
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN2DSmall__center_False__pos_spec_True__n_fft_2048__n_frames_32__n_filters_4__epoch=04__val_loss=1.408.ckpt')
+    model_path = os.path.join(OUT_DIR, 'SpecCNN2DSmall__center_True__pos_spec_False__n_fft_2048__n_frames_16__n_filters_4__epoch=04__val_loss=0.295.ckpt')
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN2DSmall__center_True__pos_spec_False__n_fft_2048__n_frames_8__n_filters_4__epoch=04__val_loss=0.282.ckpt')
+    model = SpecCNN2DSmall(n_filters=n_filters)
 
     # n_filters = 16
     # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__n_fft_1024__n_filters_16__epoch=04__val_loss=0.262.ckpt')
@@ -95,14 +101,14 @@ if __name__ == '__main__':
     n_fft = N_FFT
     model_io_n_frames = MODEL_IO_N_FRAMES
     fade_n_samples = 32
-    # center = True
-    center = False
-    # spec_diff_mode = True
-    spec_diff_mode = False
+    center = True
+    # center = False
+    spec_diff_mode = True
+    # spec_diff_mode = False
     power = 1.0
     logarithmize = True
-    ensure_pos_spec = True
-    # ensure_pos_spec = False
+    # ensure_pos_spec = True
+    ensure_pos_spec = False
     use_phase_info = True
 
     # Wrap the spectral model with an RTS
@@ -136,6 +142,7 @@ if __name__ == '__main__':
     #         diff = np.abs(audio_in - audio_out)
     #         log.info(f'diff mean = {np.mean(diff)}')
     #         log.info(f'diff max = {np.max(diff)}')
+    #     exit()
 
     tmp_script = tr.jit.script(rts.eval())
     tr.jit.save(tmp_script, os.path.join(OUT_DIR, 'tmp.pt'))
@@ -148,9 +155,9 @@ if __name__ == '__main__':
     # exit()
 
     for idx, path in enumerate(audio_paths):
-        io_n_samples = (idx + 1) * 512
-        log.info(f'io_n_samples = {io_n_samples}')
-        script.set_buffer_size(io_n_samples)
+        # io_n_samples = (idx + 1) * 512
+        # log.info(f'io_n_samples = {io_n_samples}')
+        # script.set_buffer_size(io_n_samples)
         process_file(path, script, save_suffix=f'__{model.__class__.__name__}'
                                                f'__n_filters_{n_filters}'
                                                f'__sdm_{spec_diff_mode}')
