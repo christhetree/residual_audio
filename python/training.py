@@ -89,8 +89,8 @@ if __name__ == '__main__':
                        n_fft=N_FFT,
                        hop_len=HOP_LEN,
                        model_io_n_frames=MODEL_IO_N_FRAMES,
-                       ensure_pos_spec=True,
-                       center=False)
+                       ensure_pos_spec=False,
+                       center=True)
 
     fx_save_dir = None
     # fx_save_dir = f'{AUDIO_CHUNKS_PT_DIR}__dist'
@@ -105,4 +105,9 @@ if __name__ == '__main__':
                       f'__n_frames_{MODEL_IO_N_FRAMES}' \
                       f'__n_filters_{n_filters}'
     model = PLWrapper(fx_model, rts)
-    train(experiment_name, model, fx_data_dir=fx_save_dir)
+    train(
+        experiment_name,
+        model,
+        data_dir=f'{AUDIO_CHUNKS_PT_DIR}__centered',
+        fx_data_dir=fx_save_dir
+    )

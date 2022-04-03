@@ -104,6 +104,7 @@ if __name__ == '__main__':
         n_fft=N_FFT,
         hop_len=HOP_LEN,
         model_io_n_frames=MODEL_IO_N_FRAMES,
+        center=True
     )
     fx = None
     fx_save_dir = None
@@ -115,7 +116,8 @@ if __name__ == '__main__':
         # in_dir=os.path.join(DATA_DIR, 'raw_eval'),
         in_dir=RAW_AUDIO_DIR,
         # out_dir=os.path.join(DATA_DIR, 'proc_eval'),
-        out_dir=AUDIO_CHUNKS_PT_DIR,
+        # out_dir=AUDIO_CHUNKS_PT_DIR,
+        out_dir=f'{AUDIO_CHUNKS_PT_DIR}__centered',
         fx=fx,
         # fx_save_dir=os.path.join(DATA_DIR, 'fx_eval'),
         fx_save_dir=fx_save_dir,
