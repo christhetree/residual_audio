@@ -5,7 +5,6 @@ from typing import Optional, List
 import torch as tr
 from torch import Tensor
 from torch import nn
-from torchaudio.transforms import Spectrogram, InverseSpectrogram
 
 from config import EPS, MODEL_IO_N_FRAMES
 
@@ -21,8 +20,10 @@ class RealtimeSTFT(nn.Module):
                  io_n_samples: int = 512,
                  n_fft: int = 2048,
                  hop_len: int = 512,
+                 window: Optional[Tensor] = None,
                  model_io_n_frames: int = MODEL_IO_N_FRAMES,
                  spec_diff_mode: bool = False,
+                 center: bool = False,
                  power: Optional[float] = 1.0,
                  logarithmize: bool = True,
                  ensure_pos_spec: bool = True,
@@ -32,6 +33,10 @@ class RealtimeSTFT(nn.Module):
         super().__init__()
         assert n_fft % 2 == 0
         assert (n_fft // 2) % hop_len == 0
+        if window is not None:
+            assert window.shape == (n_fft,)
+        if center:
+            log.warning('STFT is not causal when center=True')
         assert power is None or power >= 1.0
         if power is not None and power > 1.0:
             log.warning('A power greater than 1.0 probably adds unnecessary '
@@ -42,8 +47,17 @@ class RealtimeSTFT(nn.Module):
         self.io_n_samples = io_n_samples
         self.n_fft = n_fft
         self.hop_len = hop_len
+        if window is None:
+            window = tr.hann_window(self.n_fft)
+            if not center:
+                # Ensures the NOLA constraint is met for the hann_window
+                # See https://github.com/pytorch/pytorch/issues/62323
+                # 1e-5 is chosen based on the torchaudio implementation
+                window = tr.clamp(window, min=1e-5)
+        self.window = window
         self.model_io_n_frames = model_io_n_frames
         self.spec_diff_mode = spec_diff_mode
+        self.center = center
         self.power = power
         self.logarithmize = logarithmize
         self.ensure_pos_spec = ensure_pos_spec
@@ -53,11 +67,12 @@ class RealtimeSTFT(nn.Module):
 
         # Internal parameters
         self.io_n_frames = None
-        self.io_n_frames = None
         self.overlap_n_frames = None
         self.in_buf_n_frames = None
         self.n_bins = None
         self.stft_out_shape = None
+        self.istft_in_n_frames = None
+        self.istft_length = None
         self.model_io_shape = None
         self.out_buf_n_samples = None
         self.log10_eps = None
@@ -75,18 +90,6 @@ class RealtimeSTFT(nn.Module):
         # Sets internal parameters and allocates buffers
         self.set_buffer_size(io_n_samples)
 
-        # TODO(christhetree): implement center=False case
-        self.stft = Spectrogram(n_fft=self.n_fft,
-                                hop_length=self.hop_len,
-                                pad=0,
-                                center=True,
-                                normalized=False,
-                                power=None)
-        self.istft = InverseSpectrogram(n_fft=self.n_fft,
-                                        hop_length=self.hop_len,
-                                        pad=0,
-                                        center=True,
-                                        normalized=False)
         # These must be instantiated for TorchScript
         self.fade_up = tr.linspace(0, 1, max(self.fade_n_samples, 1))
         self.fade_down = tr.linspace(1, 0, max(self.fade_n_samples, 1))
@@ -96,12 +99,29 @@ class RealtimeSTFT(nn.Module):
         self.io_n_frames = self.io_n_samples // self.hop_len
         assert self.io_n_frames <= self.model_io_n_frames
         self.overlap_n_frames = self.n_fft // 2 // self.hop_len
-        self.in_buf_n_frames = (self.overlap_n_frames * 2) - 1 + self.io_n_frames
+        self.in_buf_n_frames = (2 * self.overlap_n_frames) + self.io_n_frames - 1
         self.n_bins = (self.n_fft // 2) + 1
-        self.stft_out_shape = (self.batch_size, self.n_bins, self.in_buf_n_frames + 1)
-        self.model_io_shape = (self.batch_size, self.n_bins, self.model_io_n_frames)
+        if self.center:
+            self.stft_out_shape = (
+                self.batch_size,
+                self.n_bins,
+                (2 * self.overlap_n_frames) + self.io_n_frames,
+            )
+            self.istft_in_n_frames = self.overlap_n_frames + self.io_n_frames
+            self.istft_length = (self.istft_in_n_frames - 1) * self.hop_len
+        else:
+            self.stft_out_shape = (self.batch_size,
+                                   self.n_bins,
+                                   self.io_n_frames)
+            self.istft_in_n_frames = self.io_n_frames
+            self.istft_length = self.in_buf_n_frames * self.hop_len
+        assert self.istft_in_n_frames <= self.model_io_n_frames
+
+        self.model_io_shape = (self.batch_size,
+                               self.n_bins,
+                               self.model_io_n_frames)
         self.out_buf_n_samples = self.io_n_samples + self.fade_n_samples
-        assert self.out_buf_n_samples <= (self.in_buf_n_frames - 1) * self.hop_len
+        assert self.out_buf_n_samples <= self.istft_length
         self.log10_eps = tr.log10(tr.tensor([self.eps]))
 
     def _allocate_buffers(self) -> None:
@@ -119,7 +139,7 @@ class RealtimeSTFT(nn.Module):
         self.phase_buf = tr.zeros(self.model_io_shape)
 
         self.out_frames_buf = tr.full(
-            (self.batch_size, self.n_bins, self.in_buf_n_frames),
+            (self.batch_size, self.n_bins, self.istft_in_n_frames),
             self.eps,
             dtype=tr.complex64,
         )
@@ -173,16 +193,20 @@ class RealtimeSTFT(nn.Module):
     def _update_mag_or_phase_buffers(self,
                                      stft_out_buf: Tensor,
                                      frames_buf: Tensor) -> Tensor:
-        # Remove overlap frames we have computed before
-        frames = stft_out_buf[:, :, self.overlap_n_frames:]
-        # Identify frames that are more correct due to missing prev audio info
-        fixed_prev_frames = frames[:, :, :-self.io_n_frames]
-        assert fixed_prev_frames.shape[2] == self.overlap_n_frames
-        # Identify the new frames for the input audio chunk
-        new_frames = frames[:, :, -self.io_n_frames:]
-        # Overwrite previous frames with more correct frames
-        n_fixed_frames = min(self.model_io_n_frames, self.overlap_n_frames)
-        frames_buf[:, :, -n_fixed_frames:] = fixed_prev_frames[:, :, -n_fixed_frames:]
+        if self.center:
+            # Remove overlap frames we have computed before
+            frames = stft_out_buf[:, :, self.overlap_n_frames:]
+            # Identify frames that are more correct due to missing prev audio
+            fixed_prev_frames = frames[:, :, :-self.io_n_frames]
+            assert fixed_prev_frames.shape[2] == self.overlap_n_frames
+            # Identify the new frames for the input audio chunk
+            new_frames = frames[:, :, -self.io_n_frames:]
+            # Overwrite previous frames with more correct frames
+            n_fixed_frames = min(self.model_io_n_frames, self.overlap_n_frames)
+            frames_buf[:, :, -n_fixed_frames:] = fixed_prev_frames[:, :, -n_fixed_frames:]
+        else:
+            new_frames = stft_out_buf[:, :, -self.io_n_frames:]
+
         # Shift buffer left and insert new frames
         frames_buf = tr.roll(frames_buf, -self.io_n_frames, dims=2)
         frames_buf[:, :, -self.io_n_frames:] = new_frames
@@ -193,7 +217,12 @@ class RealtimeSTFT(nn.Module):
         assert audio.shape[0] == self.batch_size
         assert audio.shape[1] >= self.n_fft
         assert audio.shape[1] % self.hop_len == 0
-        spec = self.stft(audio)
+        spec = tr.stft(audio,
+                       n_fft=self.n_fft,
+                       hop_length=self.hop_len,
+                       window=self.window,
+                       center=self.center,
+                       return_complex=True)
         if self.power is None:
             spec = spec.real
         else:
@@ -216,7 +245,12 @@ class RealtimeSTFT(nn.Module):
         self.in_buf = tr.roll(self.in_buf, -self.io_n_samples, dims=1)
         self.in_buf[:, -self.io_n_samples:] = audio
 
-        complex_frames = self.stft(self.in_buf)
+        complex_frames = tr.stft(self.in_buf,
+                                 n_fft=self.n_fft,
+                                 hop_length=self.hop_len,
+                                 window=self.window,
+                                 center=self.center,
+                                 return_complex=True)
         if self.power is None:
             self.stft_mag_buf = complex_frames.real
         else:
@@ -246,11 +280,11 @@ class RealtimeSTFT(nn.Module):
     @tr.jit.export
     def spec_to_audio(self, spec: Tensor) -> Tensor:
         assert spec.shape == self.model_io_shape
-        spec = spec[:, :, -self.in_buf_n_frames:]
+        spec = spec[:, :, -self.istft_in_n_frames:]
         if self.use_phase_info:
-            phase = self.phase_buf[:, :, -self.in_buf_n_frames:]
+            phase = self.phase_buf[:, :, -self.istft_in_n_frames:]
         else:
-            phase = self.zero_phase[:, :, -self.in_buf_n_frames:]
+            phase = self.zero_phase[:, :, -self.istft_in_n_frames:]
 
         if self.logarithmize:
             if self.ensure_pos_spec:
@@ -265,7 +299,12 @@ class RealtimeSTFT(nn.Module):
                 tr.pow(spec, 1 / self.power, out=spec)
             tr.polar(spec, phase, out=self.out_frames_buf)
 
-        rec_audio = self.istft(self.out_frames_buf)
+        rec_audio = tr.istft(self.out_frames_buf,
+                             n_fft=self.n_fft,
+                             hop_length=self.hop_len,
+                             window=self.window,
+                             center=self.center,
+                             length=self.istft_length)
         rec_audio = rec_audio[:, -self.out_buf_n_samples:]
         if self.fade_n_samples == 0:
             return rec_audio
@@ -321,7 +360,7 @@ class RealtimeSTFT(nn.Module):
 
 if __name__ == '__main__':
     batch_size = 1
-    io_n_samples = 2048
+    io_n_samples = 512
     n_fft = 2048
     hop_len = 512
     # io_n_samples = 2
@@ -330,10 +369,12 @@ if __name__ == '__main__':
     model_io_n_frames = 16
     power = 1.0
     logarithmize = False
-    center = True
+    ensure_pos_spec = True
+    # center = True
+    center = False
     use_phase_info = True
     fade_n_samples = 0
-    audio_n_frames = 16
+    audio_n_frames = 19
 
     rts = RealtimeSTFT(
         batch_size=batch_size,
@@ -341,24 +382,36 @@ if __name__ == '__main__':
         n_fft=n_fft,
         hop_len=hop_len,
         model_io_n_frames=model_io_n_frames,
+        center=center,
         power=power,
         logarithmize=logarithmize,
+        ensure_pos_spec=ensure_pos_spec,
         use_phase_info=use_phase_info,
         fade_n_samples=fade_n_samples,
     )
-    stft = Spectrogram(n_fft=n_fft,
-                       hop_length=hop_len,
-                       pad=0,
-                       center=center,
-                       normalized=False,
-                       power=power)
 
     audio = tr.rand((batch_size, hop_len * audio_n_frames))
     assert audio_n_frames % rts.io_n_frames == 0
 
-    all_spec = rts.audio_to_spec_offline(audio)
-    # all_spec = stft(audio)
+    # all_spec = rts.audio_to_spec_offline(audio)
+    all_spec = tr.stft(audio,
+                       n_fft,
+                       hop_len,
+                       window=rts.window,
+                       center=center,
+                       return_complex=True)
+    all_rec = tr.istft(all_spec,
+                       n_fft,
+                       hop_len,
+                       window=rts.window,
+                       center=center,
+                       length=audio.shape[1])
+    # diff = abs(audio - all_rec)
+    # log.info(f'diff.mean() = {diff.mean()}')
+    # log.info(f'diff.max() = {diff.max()}')
+    # exit()
 
+    all_spec = all_spec.abs()
     chunked_spec = None
     n_steps = (hop_len * audio_n_frames) // io_n_samples
     for idx in range(n_steps):
