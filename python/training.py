@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from config import BATCH_SIZE, NUM_WORKERS, OUT_DIR, AUDIO_CHUNKS_PT_DIR, \
     N_FFT, HOP_LEN, GPU, MODEL_IO_N_FRAMES
 from datasets import PathsDataset
-from modeling import FXModel
+from modeling import FXModel, SpecCNN2DSmall
 from pl_wrapper import PLWrapper
 from realtime_stft import RealtimeSTFT
 
@@ -75,7 +75,7 @@ def train(experiment_name: str,
                        patience=8,
                        verbose=True)
     trainer = pl.Trainer(gpus=GPU,
-                         max_epochs=10,
+                         max_epochs=5,
                          log_every_n_steps=50,
                          callbacks=[cp, es])
     log.info('')
@@ -88,13 +88,19 @@ if __name__ == '__main__':
     rts = RealtimeSTFT(batch_size=BATCH_SIZE,
                        n_fft=N_FFT,
                        hop_len=HOP_LEN,
-                       model_io_n_frames=MODEL_IO_N_FRAMES)
+                       model_io_n_frames=MODEL_IO_N_FRAMES,
+                       ensure_pos_spec=True,
+                       center=False)
 
-    fx_save_dir = f'{AUDIO_CHUNKS_PT_DIR}__dist'
-    n_filters = 1
-    fx_model = FXModel(n_filters=n_filters)
+    fx_save_dir = None
+    # fx_save_dir = f'{AUDIO_CHUNKS_PT_DIR}__dist'
+    n_filters = 4
+    # fx_model = FXModel(n_filters=n_filters)
+    fx_model = SpecCNN2DSmall(n_filters=n_filters)
 
     experiment_name = f'{fx_model.__class__.__name__}' \
+                      f'__center_{rts.center}' \
+                      f'__pos_spec_{rts.ensure_pos_spec}' \
                       f'__n_fft_{N_FFT}' \
                       f'__n_frames_{MODEL_IO_N_FRAMES}' \
                       f'__n_filters_{n_filters}'

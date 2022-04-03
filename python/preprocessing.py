@@ -5,15 +5,12 @@ from typing import Optional
 import joblib
 import librosa as lr
 import numpy as np
-import soundfile as sf
 import torch as tr
 from pedalboard import Pedalboard
-from pedalboard_native import Distortion
-from pedalboard_native.io import AudioFile
 from tqdm import tqdm
 
 from config import AUDIO_CHUNKS_PT_DIR, SR, RAW_AUDIO_DIR, \
-    OUT_DIR, N_FFT, HOP_LEN, DATA_DIR, MODEL_IO_N_FRAMES
+    N_FFT, HOP_LEN, MODEL_IO_N_FRAMES
 from realtime_stft import RealtimeSTFT
 
 logging.basicConfig()
@@ -43,6 +40,8 @@ def create_chunks(path: str,
 
     audio_len = len(dry_audio)
     proc_window_len = (rts.model_io_n_frames - 1) * rts.hop_len
+    if not rts.center:
+        proc_window_len += 2 * rts.overlap_n_frames * rts.hop_len
     proc_hop_len = int(proc_window_len * overlap)
     n_steps = ((audio_len - proc_window_len) // proc_hop_len) + 1
     file_name = os.path.basename(path)
@@ -106,8 +105,10 @@ if __name__ == '__main__':
         hop_len=HOP_LEN,
         model_io_n_frames=MODEL_IO_N_FRAMES,
     )
-    fx = Pedalboard([Distortion(drive_db=30.0)])
-    fx_save_dir = f'{AUDIO_CHUNKS_PT_DIR}__dist'
+    fx = None
+    fx_save_dir = None
+    # fx = Pedalboard([Distortion(drive_db=30.0)])
+    # fx_save_dir = f'{AUDIO_CHUNKS_PT_DIR}__dist'
 
     create_chunks_parallel(
         rts,
