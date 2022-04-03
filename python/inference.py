@@ -5,6 +5,7 @@ import librosa as lr
 import numpy as np
 import soundfile as sf
 import torch as tr
+from numpy import ndarray
 from tqdm import tqdm
 
 from config import SR, OUT_DIR, HOP_LEN, N_FFT, MODEL_IO_N_FRAMES
@@ -21,7 +22,7 @@ log.setLevel(level=os.environ.get('LOGLEVEL', 'INFO'))
 def process_file(path: str,
                  rts: RealtimeSTFT,
                  save_suffix: str = '',
-                 sr: int = SR) -> None:
+                 sr: int = SR) -> (ndarray, ndarray):
     audio_in, _ = lr.load(path, sr=sr, mono=True)
     n_steps = len(audio_in) // rts.io_n_samples
     audio_in = audio_in[:n_steps * rts.io_n_samples]
@@ -39,7 +40,8 @@ def process_file(path: str,
         audio_chunk = chunk_out[0].numpy()
         audio_out.append(audio_chunk)
 
-    audio_out.append(rts.flush()[0].numpy())
+    if rts.fade_n_samples > 0:
+        audio_out.append(rts.flush()[0].numpy())
     audio_out = np.concatenate(audio_out)
 
     wav_name = os.path.basename(path)[:-4]
@@ -51,6 +53,7 @@ def process_file(path: str,
     sf.write(os.path.join(OUT_DIR, out_save_name),
              audio_out,
              samplerate=sr)
+    return audio_in, audio_out
 
 
 if __name__ == '__main__':
@@ -58,9 +61,9 @@ if __name__ == '__main__':
     model_path = None
     n_filters = None
 
-    n_filters = 4
-    model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
-    model = SpecCNN2DSmall(n_filters=n_filters)
+    # n_filters = 4
+    # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__testing__epoch=05__val_loss=0.296.ckpt')
+    # model = SpecCNN2DSmall(n_filters=n_filters)
 
     # n_filters = 16
     # model_path = os.path.join(OUT_DIR, 'SpecCNN2D__n_fft_1024__n_filters_16__epoch=04__val_loss=0.262.ckpt')
@@ -92,12 +95,14 @@ if __name__ == '__main__':
     n_fft = N_FFT
     model_io_n_frames = MODEL_IO_N_FRAMES
     fade_n_samples = 32
-    spec_diff_mode = True
-    # spec_diff_mode = False
+    # center = True
+    center = False
+    # spec_diff_mode = True
+    spec_diff_mode = False
     power = 1.0
     logarithmize = True
-    # ensure_pos_spec = True
-    ensure_pos_spec = False
+    ensure_pos_spec = True
+    # ensure_pos_spec = False
     use_phase_info = True
 
     # Wrap the spectral model with an RTS
@@ -108,6 +113,7 @@ if __name__ == '__main__':
         n_fft=n_fft,
         hop_len=hop_len,
         model_io_n_frames=model_io_n_frames,
+        center=center,
         spec_diff_mode=spec_diff_mode,
         power=power,
         logarithmize=logarithmize,
@@ -120,8 +126,16 @@ if __name__ == '__main__':
     audio_paths = [os.path.join(audio_dir, _) for _ in os.listdir(audio_dir)
                    if _.endswith('.wav')]
     # for path in audio_paths:
-    #     process_file(path, rts, save_suffix=f'__{model.__class__.__name__}__python')
-    #     exit()
+    #     audio_in, audio_out = process_file(
+    #         path,
+    #         rts,
+    #         save_suffix=f'__{model.__class__.__name__}__python'
+    #     )
+    #     if fade_n_samples == 0:
+    #         assert len(audio_in) == len(audio_out)
+    #         diff = np.abs(audio_in - audio_out)
+    #         log.info(f'diff mean = {np.mean(diff)}')
+    #         log.info(f'diff max = {np.max(diff)}')
 
     tmp_script = tr.jit.script(rts.eval())
     tr.jit.save(tmp_script, os.path.join(OUT_DIR, 'tmp.pt'))
@@ -134,10 +148,10 @@ if __name__ == '__main__':
     # exit()
 
     for idx, path in enumerate(audio_paths):
-        process_file(path, script, save_suffix=f'__{model.__class__.__name__}'
-                                               f'__n_filters_{n_filters}'
-                                               f'__sdm_{spec_diff_mode}')
         io_n_samples = (idx + 1) * 512
         log.info(f'io_n_samples = {io_n_samples}')
         script.set_buffer_size(io_n_samples)
+        process_file(path, script, save_suffix=f'__{model.__class__.__name__}'
+                                               f'__n_filters_{n_filters}'
+                                               f'__sdm_{spec_diff_mode}')
         # exit()

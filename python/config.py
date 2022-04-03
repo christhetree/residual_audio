@@ -18,7 +18,7 @@ N_FFT = 2048
 # N_FFT = 1024
 HOP_LEN = N_FFT // 4
 N_BINS = (N_FFT // 2) + 1
-MODEL_IO_N_FRAMES = 32
+MODEL_IO_N_FRAMES = 16
 
 AUDIO_CHUNKS_PT_DIR = os.path.join(DATA_DIR, f'audio_chunks_pt'
                                              f'__n_fft_{N_FFT}'
