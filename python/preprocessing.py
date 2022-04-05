@@ -77,9 +77,13 @@ def create_chunks_parallel(
         n_jobs: int = -1
 ) -> None:
     assert os.path.isdir(in_dir)
-    assert os.path.isdir(out_dir)
+    if not os.path.isdir(out_dir):
+        log.info(f'Making out_dir: {out_dir}')
+        os.mkdir(out_dir)
     if fx_save_dir is not None:
-        assert os.path.isdir(fx_save_dir)
+        if not os.path.isdir(fx_save_dir):
+            log.info(f'Making fx_save_dir: {fx_save_dir}')
+            os.mkdir(fx_save_dir)
 
     audio_paths = []
     for root, dirs, files in os.walk(in_dir):
@@ -117,7 +121,7 @@ if __name__ == '__main__':
         in_dir=RAW_AUDIO_DIR,
         # out_dir=os.path.join(DATA_DIR, 'proc_eval'),
         # out_dir=AUDIO_CHUNKS_PT_DIR,
-        out_dir=f'{AUDIO_CHUNKS_PT_DIR}__centered',
+        out_dir=AUDIO_CHUNKS_PT_DIR,
         fx=fx,
         # fx_save_dir=os.path.join(DATA_DIR, 'fx_eval'),
         fx_save_dir=fx_save_dir,
