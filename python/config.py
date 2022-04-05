@@ -12,16 +12,19 @@ DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data'))
 RAW_AUDIO_DIR = os.path.join(DATA_DIR, 'raw_audio_in')
 
 SR = 44100
+# SR = 48000
 EPS = 1e-8
 
 N_FFT = 2048
-# N_FFT = 1024
 HOP_LEN = N_FFT // 4
-N_BINS = (N_FFT // 2) + 1
+CENTER = True
 MODEL_IO_N_FRAMES = 16
 
+N_BINS = (N_FFT // 2) + 1
 AUDIO_CHUNKS_PT_DIR = os.path.join(DATA_DIR, f'audio_chunks_pt'
+                                             f'__sr_{SR}'
                                              f'__n_fft_{N_FFT}'
+                                             f'__center_{CENTER}'
                                              f'__n_frames_{MODEL_IO_N_FRAMES}')
 
 GPU_IDX = None

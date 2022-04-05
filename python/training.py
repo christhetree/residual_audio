@@ -10,7 +10,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from torch.utils.data import DataLoader
 
 from config import BATCH_SIZE, NUM_WORKERS, OUT_DIR, AUDIO_CHUNKS_PT_DIR, \
-    N_FFT, HOP_LEN, GPU, MODEL_IO_N_FRAMES
+    N_FFT, HOP_LEN, GPU, MODEL_IO_N_FRAMES, CENTER, SR
 from datasets import PathsDataset
 from modeling import FXModel, SpecCNN2DSmall
 from pl_wrapper import PLWrapper
@@ -89,8 +89,8 @@ if __name__ == '__main__':
                        n_fft=N_FFT,
                        hop_len=HOP_LEN,
                        model_io_n_frames=MODEL_IO_N_FRAMES,
-                       ensure_pos_spec=False,
-                       center=True)
+                       center=CENTER,
+                       ensure_pos_spec=False)
 
     fx_save_dir = None
     # fx_save_dir = f'{AUDIO_CHUNKS_PT_DIR}__dist'
@@ -99,15 +99,16 @@ if __name__ == '__main__':
     fx_model = SpecCNN2DSmall(n_filters=n_filters)
 
     experiment_name = f'{fx_model.__class__.__name__}' \
+                      f'__sr_{SR}' \
+                      f'__n_fft_{rts.n_fft}' \
                       f'__center_{rts.center}' \
+                      f'__n_frames_{rts.model_io_n_frames}' \
                       f'__pos_spec_{rts.ensure_pos_spec}' \
-                      f'__n_fft_{N_FFT}' \
-                      f'__n_frames_{MODEL_IO_N_FRAMES}' \
                       f'__n_filters_{n_filters}'
     model = PLWrapper(fx_model, rts)
     train(
         experiment_name,
         model,
-        data_dir=f'{AUDIO_CHUNKS_PT_DIR}__centered',
+        data_dir=AUDIO_CHUNKS_PT_DIR,
         fx_data_dir=fx_save_dir
     )
